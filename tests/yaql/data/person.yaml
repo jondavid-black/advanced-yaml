@@ -1,0 +1,21 @@
+name: John Doe
+age: 30
+birthday: 1975-11-01
+office: 55
+bio: docs/design.md
+home_directory: docs/
+website: https://192.168.1.155
+---
+name: Jane Doe
+age: 27
+birthday: 1975-11-02
+office: 54
+bio: docs/design.md
+home_directory: docs/
+website: https://192.168.1.155
+address:
+  name: Home Address
+  street: 123 Main St
+  city: Anytown
+  state: CA
+  zip_code: 12345

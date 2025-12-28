@@ -9,9 +9,9 @@ from common import advanced_yaml_version
 from yasl import yasl_eval
 
 
-def main():
+def get_parser():
     parser = argparse.ArgumentParser(
-        description="YASL - YAML Advanced Schema Language CLI Tool"
+        prog="yasl", description="YASL - YAML Advanced Schema Language CLI Tool"
     )
     # Removed --project-name argument; 'param' will be used for project name in 'init'
     parser.add_argument(
@@ -42,7 +42,11 @@ def main():
         default="text",
         help="Set output format (text, json, yaml). Default is text.",
     )
+    return parser
 
+
+def main():
+    parser = get_parser()
     args = parser.parse_args()
 
     if args.verbose and args.quiet:

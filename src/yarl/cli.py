@@ -8,9 +8,9 @@ import sys
 from common import advanced_yaml_version
 
 
-def main():
+def get_parser():
     parser = argparse.ArgumentParser(
-        description="YARL - YAML Advanced Reporting Language CLI Tool"
+        prog="yarl", description="YARL - YAML Advanced Reporting Language CLI Tool"
     )
 
     parser.add_argument(
@@ -26,7 +26,11 @@ def main():
         default="text",
         help="Set output format (text, json, yaml). Default is text.",
     )
+    return parser
 
+
+def main():
+    parser = get_parser()
     args = parser.parse_args()
 
     if args.verbose and args.quiet:

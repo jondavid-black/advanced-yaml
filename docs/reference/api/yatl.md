@@ -1,0 +1,3 @@
+# YATL API Reference
+
+::: yatl

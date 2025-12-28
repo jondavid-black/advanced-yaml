@@ -128,9 +128,9 @@ class YaqlShell(cmd.Cmd):
         return self.do_exit(arg)
 
 
-def main():
+def get_parser():
     parser = argparse.ArgumentParser(
-        description="YAQL - YAML Advanced Query Language CLI Tool"
+        prog="yaql", description="YAQL - YAML Advanced Query Language CLI Tool"
     )
 
     parser.add_argument(
@@ -140,7 +140,11 @@ def main():
         "--quiet", action="store_true", help="Suppress output except for errors"
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    return parser
 
+
+def main():
+    parser = get_parser()
     args = parser.parse_args()
 
     if args.verbose and args.quiet:

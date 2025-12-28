@@ -1,0 +1,27 @@
+.md-header__button.md-logo {
+  margin: 0.2rem;
+  padding: 0;
+}
+
+.md-header__button.md-logo img {
+  width: 4rem;
+  height: auto;
+}
+
+.md-header__title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-left: 0.5rem;
+  line-height: normal;
+}
+
+.md-header__inner {
+  padding-top: 0.1rem;
+  padding-bottom: 0.01rem;
+}
+
+.md-tabs__link {
+  font-size: 1.0rem;
+  font-weight: 700;
+}
+

@@ -53,7 +53,7 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(log_dict)
 
 
-def setup_logging(
+def _setup_logging(
     disable: bool,
     verbose: bool,
     quiet: bool,
@@ -86,6 +86,12 @@ def setup_logging(
 
 
 def yasl_version() -> str:
+    """
+    Get the version of the YASL package.
+
+    Returns:
+        str: The version string defined in pyproject.toml, or an error message if the file cannot be read.
+    """
     try:
         pyproject_path = os.path.join(os.path.dirname(__file__), "../../pyproject.toml")
         with open(pyproject_path, "rb") as f:
@@ -123,7 +129,7 @@ def yasl_eval(
         Optional[List[BaseModel]]: List of validated Pydantic models if validation is successful, None otherwise.
     """
 
-    setup_logging(
+    _setup_logging(
         disable=disable_log,
         verbose=verbose_log,
         quiet=quiet_log,
@@ -507,7 +513,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
 
 
 # --- Helper function to find the line number ---
-def get_line_for_error(data: Any, loc: tuple[str | int, ...]) -> int | None:
+def _get_line_for_error(data: Any, loc: tuple[str | int, ...]) -> int | None:
     """Traverse the ruamel.yaml data to find the line number for an error location."""
     current_data = data
     try:
@@ -588,7 +594,7 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
         list[YaslRoot] | None: A list of validated YaslRoot objects if successful,
         or None if validation fails or the file cannot be read.
 
-    Raises:
+    Note:
         The function catches most exceptions (FileNotFoundError, YAMLError, ValidationError)
         and logs them as errors, returning None.
     """
@@ -651,7 +657,7 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
             f"❌ YASL schema validation of {path} failed with {len(e.errors())} error(s):"
         )
         for error in e.errors():
-            line = get_line_for_error(data, error["loc"])
+            line = _get_line_for_error(data, error["loc"])
             path_str = " -> ".join(map(str, error["loc"]))
             if line:
                 log.error(f"  - Line {line}: '{path_str}' -> {error['msg']}")
@@ -682,7 +688,7 @@ def load_data(
         Any: An instance of the validated Pydantic model if successful,
         or None if validation fails or the schema cannot be found.
 
-    Raises:
+    Note:
         The function catches ValidationError and SyntaxError, logs the details,
         and returns None.
     """
@@ -739,7 +745,7 @@ def load_data_files(path: str, model_name: str | None = None) -> Any:
         Any: A list of validated Pydantic models (one for each document in the YAML file)
         if successful, or None if validation fails or the file cannot be read.
 
-    Raises:
+    Note:
         The function catches exceptions like FileNotFoundError, SyntaxError, YAMLError,
         and ValidationError, logging them as errors and returning None.
     """
@@ -828,7 +834,7 @@ def load_data_files(path: str, model_name: str | None = None) -> Any:
     except ValidationError as e:
         log.error(f"❌ Validation failed with {len(e.errors())} error(s):")
         for error in e.errors():
-            line = get_line_for_error(data, error["loc"])
+            line = _get_line_for_error(data, error["loc"])
             path_str = " -> ".join(map(str, error["loc"]))
             if line:
                 log.error(f"  - Line {line} - '{path_str}' -> {error['msg']}")

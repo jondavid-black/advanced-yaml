@@ -7,6 +7,10 @@ site_author: "JD Black"
 # This enables the 'material' theme
 theme:
   name: "material"
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: indigo
   
   # Features like navigation tabs, search, etc.
   features:
@@ -15,18 +19,20 @@ theme:
     - navigation.expand
     - search.suggest
     - search.highlight
+  
+  logo: assets/advanced-yaml-logo.svg
+  favicon: assets/advanced-yaml-logo.svg
 
-# --- Navigation Structure ---
-# This is the most important part.
-# It defines your sidebar and top-level navigation.
-nav:
-  - "Home": "index.md"
-  - "User Guide":
-      - "Installation": "guide/installation.md"
-      - "Quick Start": "guide/quick-start.md"
-  - "About":
-      - "License": "license.md"
-      - "Contributing": "contributing.md"
+# --- Plugins ---
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_root_heading: true
+            show_source: true
 
 # --- Extensions ---
 # Enables extra markdown features
@@ -34,3 +40,38 @@ markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
   - admonition
+  - mkdocs_argparse
+
+# --- Extra CSS ---
+extra_css:
+  - stylesheets/extra.css
+
+# --- Extra JS ---
+extra_javascript:
+  - javascripts/extra.js
+
+# --- Navigation Structure ---
+# This is the most important part.
+# It defines your sidebar and top-level navigation.
+nav:
+  - "Home": "index.md"
+
+  - "User Guide":
+      - "Installation": "guide/installation.md"
+      - "Quick Start": "guide/quick-start.md"
+      - "Using Schemas": "guide/schemas.md"
+      - "Schema Primitives": "guide/primitives.md"
+      - "Data References": "guide/references.md"
+  - "CLI Reference":
+      - "YASL CLI": "reference/cli/yasl.md"
+      - "YAQL CLI": "reference/cli/yaql.md"
+      - "YARL CLI": "reference/cli/yarl.md"
+      - "YATL CLI": "reference/cli/yatl.md"
+  - "API Reference":
+      - "YASL API": "reference/api/yasl.md"
+      - "YAQL API": "reference/api/yaql.md"
+      - "YARL API": "reference/api/yarl.md"
+      - "YATL API": "reference/api/yatl.md"
+  - "About":
+      - "License": "license.md"
+      - "Contributing": "contributing.md"

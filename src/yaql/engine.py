@@ -415,15 +415,36 @@ _yaql_engine = YaqlEngine()
 
 
 def load_schema(schema_path: str) -> bool:
-    """Load YASL schema into the YAQL engine."""
+    """
+    Load YASL schema definitions into the global YAQL engine.
+
+    Args:
+        schema_path: Path to a .yasl file or a directory containing .yasl files.
+
+    Returns:
+        True if all schemas were loaded successfully, False otherwise.
+    """
     return _yaql_engine.load_schema(schema_path)
 
 
 def load_data(data_path: str) -> int:
-    """Load YAML data into the YAQL engine."""
+    """
+    Load YAML data files into the global YAQL engine.
+
+    Args:
+        data_path: Path to a .yaml/.yml file or a directory containing such files.
+
+    Returns:
+        The number of data records successfully loaded.
+    """
     return _yaql_engine.load_data(data_path)
 
 
 def get_session() -> Session:
-    """Get a new SQLModel Session."""
+    """
+    Get a new SQLModel Session bound to the global YAQL engine.
+
+    Returns:
+        A new Session object for interacting with the database.
+    """
     return _yaql_engine.session

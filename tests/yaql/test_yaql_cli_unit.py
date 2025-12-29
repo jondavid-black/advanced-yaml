@@ -162,3 +162,99 @@ def test_eof_alias(shell, mock_engine):
     result = shell.do_EOF("")
     # mock_engine.close.assert_called_once()
     assert result is True
+
+
+def test_cli_launch_and_quit_simulated(capsys, caplog):
+    """
+    Test the main() function by mocking sys.argv and inputs.
+    We need to handle the fact that main() sets up logging and runs cmdloop.
+    """
+    from yaql.cli import main
+
+    # We need to mock input to return 'quit' immediately
+    with (
+        patch("builtins.input", side_effect=["quit"]),
+        patch("sys.argv", ["yaql"]),
+        patch("logging.basicConfig") as mock_basic_config,
+        caplog.at_level(logging.INFO),
+    ):
+        main()
+
+        # Verify basicConfig was called with expected defaults
+        mock_basic_config.assert_called_with(level=logging.INFO, format="%(message)s")
+
+    captured = capsys.readouterr()
+    # "Welcome to the YAQL shell" is printed to stdout by cmd.Cmd
+    assert "Welcome to the YAQL shell." in captured.out
+
+    # "Goodbye!" is logged via info.
+    assert "Goodbye!" in caplog.text
+
+
+def test_cli_arguments_version_simulated(capsys):
+    """Test main() with --version."""
+    from yaql.cli import main
+
+    with patch("sys.argv", ["yaql", "--version"]):
+        with pytest.raises(SystemExit) as e:
+            main()
+        assert e.value.code == 0
+
+    captured = capsys.readouterr()
+    assert "YAQL version" in captured.out
+
+
+def test_cli_arguments_quiet_simulated(capsys, caplog):
+    """Test main() with --quiet."""
+    from yaql.cli import main
+
+    with (
+        patch("builtins.input", side_effect=["quit"]),
+        patch("sys.argv", ["yaql", "--quiet"]),
+        patch("logging.basicConfig") as mock_basic_config,
+        caplog.at_level(logging.ERROR),
+    ):
+        main()
+
+        # Verify basicConfig was called with ERROR
+        mock_basic_config.assert_called_with(level=logging.ERROR, format="%(message)s")
+
+    captured = capsys.readouterr()
+    assert "Welcome to the YAQL shell." in captured.out
+
+    # "Goodbye!" (INFO) should NOT be in caplog text if we are at ERROR level
+    assert "Goodbye!" not in caplog.text
+
+
+def test_cli_arguments_verbose_simulated(capsys, caplog):
+    """Test main() with --verbose."""
+    from yaql.cli import main
+
+    with (
+        patch("builtins.input", side_effect=["quit"]),
+        patch("sys.argv", ["yaql", "--verbose"]),
+        patch("logging.basicConfig") as mock_basic_config,
+        caplog.at_level(logging.DEBUG),
+    ):
+        main()
+
+        # Verify basicConfig was called with DEBUG
+        mock_basic_config.assert_called_with(level=logging.DEBUG, format="%(message)s")
+
+    # captured = capsys.readouterr()
+
+    # "Goodbye!" should be logged.
+    assert "Goodbye!" in caplog.text
+
+
+def test_cli_conflicting_args_simulated(capsys):
+    """Test main() with both --quiet and --verbose."""
+    from yaql.cli import main
+
+    with patch("sys.argv", ["yaql", "--quiet", "--verbose"]):
+        with pytest.raises(SystemExit) as e:
+            main()
+        assert e.value.code == 1
+
+    captured = capsys.readouterr()
+    assert "❌ Cannot use both --quiet and --verbose." in captured.out

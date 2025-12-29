@@ -6,8 +6,8 @@
 
 *   **YASL (YAML Advanced Schema Language):** Define strict schemas for your YAML data to ensure consistency and validity. Think of it as TypeScript for YAML.
 *   **YAQL (YAML Advanced Query Language):** Query your YAML files as if they were a database. Perform complex searches, filtering, and aggregations.
-*   **YARL (YAML Advanced Reporting Language):** Generate detailed analysis and reports from your YAML datasets.
-*   **YATL (YAML Advanced Transformation Language):** Transform YAML structures from one schema to another seamlessly.
+*   **YARL (YAML Advanced Reporting Language):** Generate detailed analysis and reports from your YAML datasets. - Not yet implemented!
+*   **YATL (YAML Advanced Transformation Language):** Transform YAML structures from one schema to another seamlessly.  - Not yet implemented!
 
 ## Getting Started
 

@@ -58,10 +58,9 @@ class YaqlShell(cmd.Cmd):
             self.log.error("❌ Please provide an output file path.")
             return
 
-        if self.engine.store_schema(arg):
-            self.log.info(f"✅ Schema exported to {arg}")
-        else:
-            self.log.error("❌ Failed to export schema.")
+        # Not implemented in the new SQLModel engine yet
+        # We need to serialize sql_models back to YASL
+        self.log.error("❌ store_schema is not yet implemented for SQLModel engine.")
 
     def do_store_data(self, arg):
         """
@@ -72,11 +71,9 @@ class YaqlShell(cmd.Cmd):
             self.log.error("❌ Please provide an output path.")
             return
 
-        try:
-            self.engine.store_data(arg)
-            self.log.info(f"✅ Data exported to {arg}")
-        except Exception as e:
-            self.log.error(f"❌ Failed to export data: {e}")
+        # Not implemented in the new SQLModel engine yet
+        # We need to dump tables to YAML
+        self.log.error("❌ store_data is not yet implemented for SQLModel engine.")
 
     def do_sql(self, arg):
         """
@@ -107,14 +104,15 @@ class YaqlShell(cmd.Cmd):
 
     def do_exit(self, arg):
         """Exit the YAQL shell."""
-        if self.engine.unsaved_changes:
-            confirm = input(
-                "⚠️ You have unsaved changes. Are you sure you want to exit? (y/N): "
-            )
-            if confirm.lower() != "y":
-                return
+        # Unsaved changes tracking removed for now
+        # if self.engine.unsaved_changes:
+        #     confirm = input(
+        #         "⚠️ You have unsaved changes. Are you sure you want to exit? (y/N): "
+        #     )
+        #     if confirm.lower() != "y":
+        #         return
 
-        self.engine.close()
+        # self.engine.close() # Close is not really needed for memory db, but good practice if exposed
         self.log.info("Goodbye!")
         return True
 
@@ -171,7 +169,7 @@ def main():
         shell.cmdloop()
     except KeyboardInterrupt:
         print("\nInterrupted. Exiting...")
-        engine.close()
+        # engine.close()
         sys.exit(1)
 
 

@@ -139,9 +139,9 @@ properties:
     type: map[date, int]      # Date keys, Integer values
 ```
 
-## References and Namespaces
+## Using Namespaces
 
-You can reference types and enums defined in other namespaces using dot notation: `<namespace>.<name>`.
+You can use types and enums defined in other namespaces using dot notation: `<namespace>.<name>`.
 
 ```yaml
 definitions:
@@ -157,5 +157,5 @@ definitions:
           street:
             type: str
           country:
-            type: common.country_code  # Reference across namespaces
+            type: common.country_code  # Use across namespaces
 ```

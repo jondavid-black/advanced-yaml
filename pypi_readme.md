@@ -1,13 +1,11 @@
-![advanced-yaml](./AdvancedYamlLogo.png)
-
 # Advanced YAML
 
 Advanced YAML is a suite of tools that streamline data management of structured data in YAML.
 
 These tools include:
- - [YASL](./src/yasl/README.md) - YAML Advanced Schema Language
- - [YAQL](./src/yaql/README.md) - YAML Advanced Query Language
- - [YARL](./src/yarl/README.md) - YAML Advanced Reporting Language
+ - YASL - YAML Advanced Schema Language
+ - YAQL - YAML Advanced Query Language
+ - YARL - YAML Advanced Reporting Language
 
 ## Vision & Inspiration
 
@@ -55,11 +53,6 @@ Advanced YAML is written in python and managed with the `UV` tool.
     uv pip install -e .[dev]
     ```
 
-- Run tests
-    ```bash
-    uv run pytest
-    ```
-
 - Run tests w/ coverage
     ```bash
     uv run pytest
@@ -78,20 +71,4 @@ Advanced YAML is written in python and managed with the `UV` tool.
 - Run type checks
     ```bash
     uv run pyright
-    ```
-
-Use the standard github-flow working process to best leverage feedback from the CI process.
-
-To Perform a release:
-- Update the version in `pyproject.toml`
-- Complete and merge the pull request to main.
-- Get on the main branch:
-    ```bash
-    git checkout main
-    git pull origin main
-    ```
-- Tag and push the repo:
-    ```bash
-    git tag "v$(uv run python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")"
-    git push --tags
     ```

@@ -1,0 +1,17 @@
+definitions:
+  rel_test:
+    types:
+      department:
+        properties:
+          name:
+            type: str
+            presence: required
+            unique: true
+      employee:
+        properties:
+          name:
+            type: str
+            presence: required
+          dept_name:
+            type: ref[department.name]
+            presence: required

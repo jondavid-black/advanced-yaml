@@ -237,6 +237,8 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
             is_list = False
             is_map = False
             key = None
+            py_type = None  # Initialize py_type
+
             if type_lookup.endswith("[]"):
                 type_lookup = prop.type[:-2]
                 is_list = True
@@ -253,6 +255,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
 
             # Prepare to wrap type with Annotated for ReferenceMarker if it's a ref[...]
 
+            # Block 1: Early ref check (seems redundant?)
             if type_lookup.startswith("ref[") and type_lookup.endswith("]"):
                 from yasl.primitives import ReferenceMarker
 
@@ -277,6 +280,8 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                     ref_type_name, ref_type_namespace, namespace
                 )
                 if not target_type:
+                    # In a real-world scenario we might need forward declaration support.
+                    # For now, raise Error as before
                     raise ValueError(
                         f"Referenced type '{ref_type_name}' for property '{prop_name}' not found in type definitions"
                     )
@@ -305,15 +310,21 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                                 f"Referenced property '{ref_type_name}.{property_name}' must be a primitive type to be used as a reference for property '{typedef_name}.{prop_name}'"
                             )
                         else:
-                            py_type = type_map[target_prop.type]
-                            # We found the type, now we mark it has handled so it skips the other checks
-                            # But wait, the original logic had 'elif type_lookup.startswith("ref[")'
-                            # So we should probably restructure this loop to be cleaner or just hook into that block.
+                            # FOUND IT!
+                            # We set py_type here, so we don't need to fall through to the elif chain below.
+                            base_type = type_map[target_prop.type]
+                            from typing import Annotated
 
-            # Re-evaluating structure to avoid massive rewrite.
-            # I will modify the existing block for ref handling to wrap the result in Annotated.
+                            from yasl.primitives import ReferenceMarker
 
-            if type_lookup in type_map:
+                            py_type = Annotated[base_type, ReferenceMarker(ref_target)]
+
+                            # Skip the rest of the if/elif chain
+                            type_lookup = ""  # Hack to skip other checks
+
+            if type_lookup == "":
+                pass  # Already handled
+            elif type_lookup in type_map:
                 py_type = type_map[type_lookup]
             elif (
                 registry.get_enum(type_lookup, type_lookup_namespace, namespace)
@@ -331,6 +342,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                 )
             elif type_lookup.startswith("map[") and type_lookup.endswith("]"):
                 is_map = True
+                # ... map logic ...
                 key, value = type_lookup[4:-1].split(",", 1)
 
                 key_type_lookup = key.strip()
@@ -454,6 +466,12 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                         else:
                             base_type = type_map[target_prop.type]
                             # Wrap the base type with Annotated and ReferenceMarker
+                            # Note: We need to use typing.Annotated explicitly
+                            # and check if we are already dealing with an Optional/Required context
+                            from typing import Annotated
+
+                            from yasl.primitives import ReferenceMarker
+
                             py_type = Annotated[base_type, ReferenceMarker(ref_target)]
             else:
                 raise ValueError(
@@ -486,12 +504,20 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
             if not is_required:
                 py_type = Optional[py_type]
 
-            default = (
+            default_val = (
                 prop.default
                 if prop.default is not None
                 else (None if not is_required else ...)
             )
-            fields[prop_name] = (py_type, default)
+
+            # Store metadata in json_schema_extra so engines can access it
+            field_extra = {"unique": prop.unique}
+
+            fields[prop_name] = (
+                py_type,  # type: ignore
+                Field(default=default_val, json_schema_extra=field_extra),  # type: ignore
+            )
+
             validators[f"{prop_name}__validator"] = property_validator_factory(
                 typedef_name, namespace, type_def, prop_name, prop
             )

@@ -1,51 +1,77 @@
-import json
+import datetime
 import logging
-import sqlite3
-from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, cast
+from typing import Annotated, Any, Optional, get_args, get_origin
 
 from pydantic import BaseModel
-from ruamel.yaml import YAML
+from sqlalchemy import JSON, Column, text
+from sqlalchemy.orm import sessionmaker
+from sqlmodel import Field, Session, SQLModel, create_engine
 
 from yasl.cache import YaslRegistry
 from yasl.core import load_data_files, load_schema_files
+from yasl.pydantic_types import YASLBaseModel
+from yasl.sql.types import AstropyQuantityType, PydanticType
+
+# --- Helper functions ---
 
 
-# Helper to adapt python date/datetime types to sqlite TEXT
-def adapt_date_iso(val):
-    return val.isoformat()
+def _get_sql_type(annotation: Any) -> Any:
+    """Determine the SQLAlchemy/SQLModel type for a given Pydantic annotation."""
+    # Basic mapping
+    if annotation is int or annotation is Optional[int]:
+        return None  # Let SQLModel infer Integer
+    if annotation is str or annotation is Optional[str]:
+        return None  # Let SQLModel infer String
+    if annotation is bool or annotation is Optional[bool]:
+        return None  # Let SQLModel infer Boolean
+    if annotation is float or annotation is Optional[float]:
+        return None  # Let SQLModel infer Float
+    if annotation is datetime.date or annotation is Optional[datetime.date]:
+        return None  # Let SQLModel infer Date
+    if annotation is datetime.time or annotation is Optional[datetime.time]:
+        return None  # Let SQLModel infer Time
+    if annotation is datetime.datetime or annotation is Optional[datetime.datetime]:
+        return None  # Let SQLModel infer DateTime
 
+    # Check for Astropy Quantity
+    # Note: We'd need a robust way to detect this.
+    # For now, if the type name is in our known physical types map, we might handle it.
+    # But since we are inspecting the *python type* (annotation), we check class name or module.
+    type_name = getattr(annotation, "__name__", str(annotation))
+    if "Quantity" in type_name or "astropy" in str(annotation):
+        return Column(AstropyQuantityType)
 
-def adapt_datetime_iso(val):
-    return val.isoformat()
-
-
-sqlite3.register_adapter(date, adapt_date_iso)
-sqlite3.register_adapter(datetime, adapt_datetime_iso)
+    # Complex types (lists, dicts, nested models) -> JSON storage
+    # This is a simplification. Ideally, relationships should be used for nested models.
+    # But given the dynamic nature of YASL->SQL mapping requested:
+    return (
+        Column(PydanticType(annotation))
+        if isinstance(annotation, type) and issubclass(annotation, YASLBaseModel)
+        else Column(JSON)
+    )
 
 
 class YaqlEngine:
-    def __init__(self):
-        self.conn = sqlite3.connect(":memory:")
-        self.conn.row_factory = sqlite3.Row  # Access columns by name
-        self.cursor = self.conn.cursor()
+    def __init__(self, db_url: str = "sqlite:///:memory:"):
+        self.engine = create_engine(db_url)
         self.registry = YaslRegistry()
-        self.unsaved_changes = False
         self.log = logging.getLogger("yaql")
+        self.sql_models: dict[str, type[SQLModel]] = {}
+        self._session_maker = sessionmaker(bind=self.engine)  # Standard sessionmaker
 
-        # Keep track of which tables map to which YASL types for export
-        # key: table_name, value: (type_name, namespace)
-        self.table_map: dict[str, tuple[str, str | None]] = {}
+    @property
+    def session(self) -> Session:
+        """Returns a new SQLModel Session."""
+        return Session(self.engine)
 
     def load_schema(self, schema_path: str) -> bool:
-        """Loads YASL schema files and creates corresponding SQLite tables."""
+        """Loads YASL schema files and dynamically creates SQLModel classes."""
         try:
             path = Path(schema_path)
             files_to_load = []
 
             if path.is_dir():
-                # Find all .yasl files
                 for p in path.rglob("*.yasl"):
                     files_to_load.append(p)
             elif path.exists():
@@ -55,110 +81,263 @@ class YaqlEngine:
                 return False
 
             if not files_to_load:
-                self.log.error(f"No schema files found in {schema_path}")
                 return False
 
             total_success = True
             for file_path in files_to_load:
-                # Use str(file_path) because load_schema_files expects a string
-                loaded_schemas = load_schema_files(str(file_path))
-                if not loaded_schemas:
-                    self.log.error(f"Failed to load schema file: {file_path}")
+                loaded = load_schema_files(str(file_path))
+                if not loaded:
                     total_success = False
-                    continue  # Try loading others
 
-            self._sync_db_with_registry()
+            self._sync_registry_to_sqlmodel()
             return total_success
         except Exception as e:
             self.log.error(f"Failed to load schema: {e}")
             return False
 
-    def _sync_db_with_registry(self):
-        """Iterates through the YASL registry and creates tables for new types."""
+    def _sync_registry_to_sqlmodel(self):
+        """Converts registered Pydantic models to SQLModel classes."""
+
         types = self.registry.get_types()
-        for (name, namespace), model_cls in types.items():
-            # Cast model_cls to Type[BaseModel] as it returns the class itself
-            cls = cast(type[BaseModel], model_cls)
+        self.log.info(
+            f"Syncing registry to SQLModel. Found {len(types)} types in registry."
+        )
+
+        # Helper to reverse lookup class -> table_name
+        class_to_table = {}
+        for (name, namespace), cls in types.items():
+            class_to_table[cls] = self._get_table_name(name, namespace)
+
+        for (name, namespace), pydantic_model in types.items():
+            self.log.info(f"Processing type: {namespace}.{name}")
             table_name = self._get_table_name(name, namespace)
-            if not self._table_exists(table_name):
-                self._create_table(table_name, cls)
-                self.table_map[table_name] = (name, namespace)
+
+            # Dynamic creation of SQLModel class
+            fields = {}
+            annotations = {}
+
+            # Primary Key
+            annotations["id"] = Optional[int]
+            fields["id"] = Field(default=None, primary_key=True)
+
+            for field_name, field_info in pydantic_model.model_fields.items():
+                if field_name == "yaml_line":
+                    continue
+
+                annotation = field_info.annotation
+
+                # Unwrap Optional/Union/Annotated
+                check_type = annotation
+                if get_origin(annotation) is Annotated:
+                    check_type = get_args(annotation)[0]
+
+                # Unwrap Optional/Union again if it was inside Annotated or just there
+                if get_origin(check_type) is not None:
+                    args = get_args(check_type)
+                    # Find the first non-None arg
+                    for arg in args:
+                        if arg is not type(None):
+                            check_type = arg
+                            break
+
+                # 1. Check for ReferenceMarker (Existing logic for manual FKs)
+                # ... (keep existing metadata extraction logic?) ...
+                # Actually, I'll rewrite the loop to be cleaner and integrate the new logic.
+
+                metadata = field_info.metadata
+                is_ref = False
+                ref_target = None
+
+                # Check metadata for ReferenceMarker
+                for meta in metadata:
+                    if (
+                        "ReferenceMarker" in str(type(meta))
+                        or "ReferenceMarker" in type(meta).__name__
+                    ):
+                        is_ref = True
+                        if hasattr(meta, "target"):
+                            ref_target = meta.target
+                        break
+                    if "ref[" in repr(meta):
+                        is_ref = True
+                        if hasattr(meta, "target"):
+                            ref_target = meta.target
+                        break
+
+                # Check Annotated args for ReferenceMarker
+                if not is_ref and get_origin(annotation) is Annotated:
+                    for arg in get_args(annotation):
+                        if (
+                            "ReferenceMarker" in str(type(arg))
+                            or "ReferenceMarker" in type(arg).__name__
+                        ):
+                            is_ref = True
+                            if hasattr(arg, "target"):
+                                ref_target = arg.target
+                            break
+                        if "ref[" in repr(arg):
+                            is_ref = True
+                            if hasattr(arg, "target"):
+                                ref_target = arg.target
+                            break
+
+                if is_ref and ref_target:
+                    # ... Existing ReferenceMarker handling ...
+                    # We can keep this block mostly as is, but cleaner.
+                    # Copying the existing logic for ReferenceMarker...
+                    self.log.info(f"Found reference: {field_name} -> {ref_target}")
+                    target_parts = ref_target.rsplit(".", 1)
+                    if len(target_parts) == 2:
+                        target_type_str, target_prop = target_parts
+                        target_ns = namespace
+                        target_type_name = target_type_str
+                        if "." in target_type_str:
+                            target_ns, target_type_name = target_type_str.rsplit(".", 1)
+
+                        target_table_name = self._get_table_name(
+                            target_type_name, target_ns
+                        )
+                        fk_string = f"{target_table_name}.{target_prop}"
+
+                        # Determine base type for the column
+                        base_type = check_type
+
+                        annotations[field_name] = base_type  # Keep original type hint
+
+                        # Map base_type to SQLAlchemy type
+                        from sqlalchemy import (
+                            Boolean,
+                            Date,
+                            DateTime,
+                            Float,
+                            ForeignKey,
+                            Integer,
+                            String,
+                            Time,
+                        )
+
+                        sa_type = String
+                        if base_type is int:
+                            sa_type = Integer
+                        elif base_type is bool:
+                            sa_type = Boolean
+                        elif base_type is float:
+                            sa_type = Float
+                        elif base_type is datetime.date:
+                            sa_type = Date
+                        elif base_type is datetime.datetime:
+                            sa_type = DateTime
+                        elif base_type is datetime.time:
+                            sa_type = Time
+
+                        fields[field_name] = Field(
+                            default=None,
+                            sa_column=Column(sa_type, ForeignKey(fk_string)),
+                        )
+                        continue
+
+                # 2. Check for Nested YASLBaseModel (New Logic)
+                if isinstance(check_type, type) and issubclass(
+                    check_type, YASLBaseModel
+                ):
+                    # It's a nested model!
+                    target_table_name = class_to_table.get(check_type)
+                    if target_table_name:
+                        self.log.info(
+                            f"Converting nested model {field_name} ({check_type.__name__}) to FK on {target_table_name}.id"
+                        )
+
+                        # Create FK field
+                        fk_field_name = f"{field_name}_id"
+                        fk_string = f"{target_table_name}.id"
+
+                        from sqlalchemy import ForeignKey, Integer
+
+                        annotations[fk_field_name] = Optional[int]
+                        fields[fk_field_name] = Field(
+                            default=None,
+                            sa_column=Column(Integer, ForeignKey(fk_string)),
+                        )
+
+                        # We do NOT add the original field to the SQLModel class
+                        # because we want to store the ID, not the JSON/Object.
+                        # However, for convenience, we could add it as a Relationship, but let's stick to the prompt:
+                        # "store these in the table ... and create a foreign key"
+                        continue
+
+                # 3. Fallback to standard handling
+                annotations[field_name] = field_info.annotation
+                sa_column = _get_sql_type(
+                    field_info.annotation
+                )  # This will still return JSON for lists/dicts
+
+                # Override _get_sql_type behavior for YASLBaseModel if it slipped through?
+                # _get_sql_type uses PydanticType for YASLBaseModel.
+                # Since we handled YASLBaseModel above, this call shouldn't return PydanticType for them,
+                # UNLESS it's a list[YASLBaseModel] or something not caught by check_type logic.
+
+                if sa_column is not None:
+                    fields[field_name] = Field(sa_column=sa_column, default=None)
+                else:
+                    fields[field_name] = Field(default=None)
+
+            # Create the class dynamically
+            metaclass = type(SQLModel)
+            sql_model_cls = metaclass(
+                name,
+                (SQLModel,),
+                {
+                    "__tablename__": table_name,
+                    "__annotations__": annotations,
+                    "__module__": namespace or "default",
+                    "__table_args__": {"extend_existing": True},
+                    **fields,
+                },
+                table=True,
+            )
+            self.sql_models[table_name] = sql_model_cls
+            self.log.info(f"Created SQLModel class for table: {table_name}")
+
+        # Create tables
+        self.log.info(f"Tables in metadata: {list(SQLModel.metadata.tables.keys())}")
+        SQLModel.metadata.create_all(self.engine)
 
     def _get_table_name(self, name: str, namespace: str | None) -> str:
         if namespace and namespace != "default":
-            # Sanitize namespace for SQL
-            sanitized_ns = namespace.replace(".", "_")
-            return f"{sanitized_ns}_{name}"
+            return f"{namespace.replace('.', '_')}_{name}"
         return name
-
-    def _table_exists(self, table_name: str) -> bool:
-        res = self.cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
-            (table_name,),
-        )
-        return res.fetchone() is not None
-
-    def _create_table(self, table_name: str, model_cls: type[BaseModel]):
-        columns = []
-        for field_name, field_info in model_cls.model_fields.items():
-            if field_name == "yaml_line":
-                continue
-
-            # Determine SQL type based on annotation
-            sql_type = "TEXT"
-            annotation = field_info.annotation
-
-            if annotation is int or annotation is Optional[int]:
-                sql_type = "INTEGER"
-            elif annotation is float or annotation is Optional[float]:
-                sql_type = "REAL"
-            elif annotation is bool or annotation is Optional[bool]:
-                sql_type = "BOOLEAN"
-
-            columns.append(f'"{field_name}" {sql_type}')
-
-        create_stmt = f'CREATE TABLE "{table_name}" ({", ".join(columns)});'
-        self.log.debug(f"Creating table: {create_stmt}")
-        self.cursor.execute(create_stmt)
-        self.conn.commit()
 
     def load_data(self, data_path: str) -> int:
         """Loads data from YAML files into the database."""
         try:
             path = Path(data_path)
-            files_to_load = []
-
+            files = []
             if path.is_dir():
-                for p in path.rglob("*.yaml"):
-                    files_to_load.append(p)
-                for p in path.rglob("*.yml"):
-                    files_to_load.append(p)
+                files.extend(path.rglob("*.yaml"))
+                files.extend(path.rglob("*.yml"))
             elif path.exists():
-                files_to_load.append(path)
-            else:
-                self.log.error(f"Data path not found: {data_path}")
-                return 0
+                files.append(path)
 
-            total_count = 0
-            for file_path in files_to_load:
-                results = load_data_files(str(file_path))
-                if not results:
-                    continue
+            count = 0
+            with self.session as session:
+                for f in files:
+                    results = load_data_files(str(f))
+                    if not results:
+                        continue
 
-                for model_instance in results:
-                    if self._insert_model(model_instance):
-                        total_count += 1
-
-            if total_count > 0:
-                self.unsaved_changes = True
-            return total_count
+                    for pydantic_obj in results:
+                        if self._insert_object(session, pydantic_obj):
+                            count += 1
+                session.commit()
+            return count
         except Exception as e:
             self.log.error(f"Failed to load data: {e}")
             return 0
 
-    def _insert_model(self, model_instance: BaseModel) -> bool:
-        cls = model_instance.__class__
-        # Finding the registry key for this class
+    def _insert_object(self, session: Session, pydantic_obj: BaseModel) -> Any:
+        # Find corresponding SQLModel
+        # Reverse lookup in registry to find name/namespace
+        cls = pydantic_obj.__class__
         found_key = None
         for key, val in self.registry.get_types().items():
             if val == cls:
@@ -166,130 +345,85 @@ class YaqlEngine:
                 break
 
         if not found_key:
-            self.log.error(f"Could not find registered type for model {cls}")
-            return False
+            return None
 
         name, namespace = found_key
         table_name = self._get_table_name(name, namespace)
+        sql_model_cls = self.sql_models.get(table_name)
 
-        # Verify table exists (in case schema wasn't loaded first or properly)
-        if not self._table_exists(table_name):
-            self.log.error(f"Table '{table_name}' does not exist for model {name}")
-            return False
+        if not sql_model_cls:
+            return None
 
-        data = model_instance.model_dump()
-        if "yaml_line" in data:
-            del data["yaml_line"]
+        # Convert pydantic data to sqlmodel data
+        data = pydantic_obj.model_dump(exclude={"yaml_line"})
 
-        columns = list(data.keys())
-        placeholders = ["?"] * len(columns)
-        values = []
-        for v in data.values():
-            if isinstance(v, (dict, list, BaseModel)):
-                values.append(json.dumps(v, default=str))
-            else:
-                values.append(v)
+        # Handle nested models recursively
+        replacements = {}
+        # Iterate over keys in the dumped data to find potential nested models
+        for field_name in list(data.keys()):
+            # Access the original attribute value to get the object, not the dict
+            if not hasattr(pydantic_obj, field_name):
+                continue
 
+            value = getattr(pydantic_obj, field_name)
+
+            if isinstance(value, BaseModel):
+                # Recursive insert
+                nested_sql_obj = self._insert_object(session, value)
+                if nested_sql_obj:
+                    session.flush()  # Ensure ID is generated
+                    replacements[f"{field_name}_id"] = nested_sql_obj.id
+
+        # Update data with IDs and remove original nested objects
+        for key, val in replacements.items():
+            data[key] = val
+            original_key = key[:-3]  # remove _id
+            if original_key in data:
+                del data[original_key]
+
+        # Instantiate and add
         try:
-            sql = f'INSERT INTO "{table_name}" ({", ".join(f"{c}" for c in columns)}) VALUES ({", ".join(placeholders)})'
-            self.cursor.execute(sql, values)
-            self.conn.commit()
-            return True
-        except sqlite3.Error as e:
-            self.log.error(f"Failed to insert row: {e}")
-            return False
-
-    def execute_sql(self, query: str) -> Optional[list[dict]]:
-        try:
-            # Check if it's a modification query to set unsaved_changes
-            lower_query = query.strip().lower()
-            if any(
-                lower_query.startswith(x)
-                for x in ["insert", "update", "delete", "create", "drop", "alter"]
-            ):
-                self.unsaved_changes = True
-
-            cursor = self.cursor.execute(query)
-            if cursor.description:
-                columns = [col[0] for col in cursor.description]
-                results = [
-                    dict(zip(columns, row, strict=False)) for row in cursor.fetchall()
-                ]
-                return results
-            else:
-                self.conn.commit()
-                return None
-        except sqlite3.Error as e:
-            self.log.error(f"SQL Error: {e}")
-            raise
-
-    def store_schema(self, output_path: str) -> bool:
-        """Exports the current schema definitions to a YASL file."""
-        try:
-            schema_yaml = self.registry.export_schema()
-            with open(output_path, "w") as f:
-                f.write(schema_yaml)
-            return True
+            sql_obj = sql_model_cls(**data)
+            session.add(sql_obj)
+            return sql_obj
         except Exception as e:
-            self.log.error(f"Failed to store schema: {e}")
-            return False
+            self.log.error(
+                f"Failed to instantiate {table_name}: {e}. Data keys: {data.keys()}"
+            )
+            return None
 
-    def store_data(self, output_path: str):
-        path = Path(output_path)
-        yaml = YAML()
-        yaml.default_flow_style = False
+    def execute_sql(self, query: str) -> list[dict] | None:
+        """Execute raw SQL (fallback)."""
+        with self.engine.connect() as conn:
+            try:
+                # Use sqlalchemy text() for proper execution of raw strings
+                result = conn.execute(text(query))
 
-        data_to_dump = []
+                # Check if it returns rows (SELECT)
+                if result.returns_rows:
+                    return [dict(row._mapping) for row in result]
 
-        # Dump all known tables
-        for table_name in self.table_map:
-            # Select all data
-            rows = self.execute_sql(f'SELECT * FROM "{table_name}"')
-            if not rows:
-                continue
+                # If modification query (INSERT, UPDATE, etc), commit
+                conn.commit()
+                return None
+            except Exception as e:
+                self.log.error(f"SQL Execution error: {e}")
+                raise e
 
-            # Convert back to native types (undoing JSON serialization)
-            type_name, namespace = self.table_map[table_name]
-            model_cls = self.registry.get_type(type_name, namespace)
 
-            if not model_cls:
-                continue
+_yaql_engine = YaqlEngine()
 
-            # Need to cast to class to access model_fields
-            cls = cast(type[BaseModel], model_cls)
 
-            for row in rows:
-                clean_row = {}
-                for k, v in row.items():
-                    if k not in cls.model_fields:
-                        continue
+def load_schema(schema_path: str) -> bool:
+    """Load YASL schema into the YAQL engine."""
+    return _yaql_engine.load_schema(schema_path)
 
-                    field = cls.model_fields[k]
 
-                    if isinstance(v, str):
-                        try:
-                            # Check schema type roughly
-                            annotation = field.annotation
-                            if not (annotation is str or annotation is Optional[str]):
-                                clean_row[k] = json.loads(v)
-                            else:
-                                clean_row[k] = v
-                        except (json.JSONDecodeError, TypeError):
-                            clean_row[k] = v
-                    else:
-                        clean_row[k] = v
+def load_data(data_path: str) -> int:
+    """Load YAML data into the YAQL engine."""
+    return _yaql_engine.load_data(data_path)
 
-                data_to_dump.append(clean_row)
 
-        if path.suffix in [".yaml", ".yml"]:
-            with open(path, "w") as f:
-                yaml.dump(data_to_dump, f)
-        else:
-            path.mkdir(parents=True, exist_ok=True)
-            with open(path / "export.yaml", "w") as f:
-                yaml.dump(data_to_dump, f)
-
-        self.unsaved_changes = False
-
-    def close(self):
-        self.conn.close()
+def get_session() -> Session:
+    """Get a new SQLModel Session."""
+    return _yaql_engine.session

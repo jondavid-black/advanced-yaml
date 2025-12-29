@@ -6,7 +6,7 @@ YAQL dynamically loads YAML data into an in-memory SQLite database, allowing use
 YAQL generated database schemas are derived from YASL schema definitions, ensuring data integrity and consistency.
 """
 
-from .cli import main
-from .engine import YaqlEngine
+from yaql.cli import main
+from yaql.engine import get_session, load_data, load_schema
 
-__all__ = ["main", "YaqlEngine"]
+__all__ = ["main", "get_session", "load_schema", "load_data"]

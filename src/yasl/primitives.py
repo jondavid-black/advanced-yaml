@@ -298,3 +298,8 @@ class ReferenceMarker:
 
     def __repr__(self):
         return f"ref[{self.target}]"
+
+    def __eq__(self, other):
+        if isinstance(other, ReferenceMarker):
+            return self.target == other.target
+        return False

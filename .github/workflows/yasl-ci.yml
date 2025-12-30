@@ -48,10 +48,9 @@ jobs:
         run: |
           ./ci.sh bdd
 
-      - name: Check yasl CLI tool
+      - name: Check CLI tools
         run: |
-          uv run yasl --version
-          uv run yasl --help
+          ./ci.sh verify-deps
 
       - name: Build documentation website
         run: |

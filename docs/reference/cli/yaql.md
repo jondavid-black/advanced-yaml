@@ -18,15 +18,13 @@ Load YAML data files.
 
 **Usage:** `load_data <path_to_yaml_file_or_dir>`
 
-### `store_schema`
-Store the current schema to a file.
+### `export_data`
+Export the current database contents to YAML files.
 
-**Usage:** `store_schema <path_to_output_yasl_file>`
+**Usage:** `export_data <path_to_output_dir> [min]`
 
-### `store_data`
-Store the current database contents to YAML.
-
-**Usage:** `store_data <path_to_output_yaml_file_or_dir>`
+**Options:**
+* `min`: If specified, writes all records of a type to a single file separated by '---'.
 
 ### `sql`
 Execute a SQL query against the in-memory database.

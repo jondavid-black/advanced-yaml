@@ -158,6 +158,7 @@ class YaslRegistry:
         self.unique_values_store.clear()
         self.yasl_type_defs.clear()
         self.yasl_enumerations.clear()
+        self._instance = None
 
     def export_schema(self) -> str:
         """

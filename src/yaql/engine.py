@@ -6,7 +6,7 @@ from typing import Annotated, Any, Optional, get_args, get_origin
 from pydantic import BaseModel
 from sqlalchemy import JSON, Column, text
 from sqlalchemy.orm import sessionmaker
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from yasl.cache import YaslRegistry
 from yasl.core import load_data_files, load_schema_files
@@ -68,6 +68,12 @@ class YaqlEngine:
     def load_schema(self, schema_path: str) -> bool:
         """Loads YASL schema files and dynamically creates SQLModel classes."""
         try:
+            # Clear previous state
+            SQLModel.metadata.clear()
+            self.sql_models.clear()
+            self.registry.clear_caches()
+            self.registry._init_registry()
+
             path = Path(schema_path)
             files_to_load = []
 
@@ -392,6 +398,206 @@ class YaqlEngine:
             )
             return None
 
+    def export_data(self, export_path: str, min_mode: bool = False) -> int:
+        """
+        Dumps the contents of the database into YAML files.
+
+        Args:
+            export_path: Directory where the YAML files will be written.
+            min_mode: If True, writes all records of a type to a single file separated by '---'.
+
+        Returns:
+            Number of files written.
+        """
+        from ruamel.yaml import YAML
+
+        from yasl.pydantic_types import YASLBaseModel
+
+        path = Path(export_path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        yaml = YAML()
+        yaml.default_flow_style = False
+        yaml.explicit_start = True  # Adds '---' at start of document
+
+        # 1. Identify Nested Relations (ParentTable -> list of {col, target_table, field_name})
+        nested_relations: dict[str, list[dict]] = {}
+        # Also keep track of consumed IDs to avoid exporting them as roots
+        consumed_ids: set[tuple[str, int]] = set()
+
+        # Build the relations map from Registry/SQLModels
+        types = self.registry.get_types()
+
+        # We need a map of PydanticType -> TableName
+        pydantic_to_table = {}
+        for (name, namespace), cls in types.items():
+            table_name = self._get_table_name(name, namespace)
+            pydantic_to_table[cls] = table_name
+
+        for (name, namespace), pydantic_model in types.items():
+            table_name = self._get_table_name(name, namespace)
+
+            for field_name, field_info in pydantic_model.model_fields.items():
+                annotation = field_info.annotation
+
+                # Unwrap types (similar to _sync_registry_to_sqlmodel)
+                check_type = annotation
+                if get_origin(annotation) is Annotated:
+                    check_type = get_args(annotation)[0]
+
+                if get_origin(check_type) is not None:
+                    args = get_args(check_type)
+                    for arg in args:
+                        if arg is not type(None):
+                            check_type = arg
+                            break
+
+                # Check if it was handled as a Nested Model FK
+                # (Logic must match _sync_registry_to_sqlmodel Lines 240-266 approx)
+                # But carefully: ReferenceMarkers are skipped there.
+
+                # We need to verify if this field IS a nested model in the SQL mapping.
+                # Inspecting the SQLModel class directly might be safer if possible,
+                # but inspecting the Registry is easier for logic.
+
+                # Simplified check: Is it a YASLBaseModel subclass AND NOT a reference?
+                # We assume ReferenceMarkers were handled/stripped or don't match issubclass directly if wrapped.
+                # But wait, check_type is the raw class.
+
+                # We need to ensure it's NOT a reference.
+                is_ref = False
+                metadata = field_info.metadata
+                for meta in metadata:
+                    if (
+                        "ReferenceMarker" in str(type(meta))
+                        or "ReferenceMarker" in type(meta).__name__
+                    ):
+                        is_ref = True
+                if not is_ref and get_origin(annotation) is Annotated:
+                    for arg in get_args(annotation):
+                        if (
+                            "ReferenceMarker" in str(type(arg))
+                            or "ReferenceMarker" in type(arg).__name__
+                        ):
+                            is_ref = True
+
+                if (
+                    not is_ref
+                    and isinstance(check_type, type)
+                    and issubclass(check_type, YASLBaseModel)
+                ):
+                    # This is a nested relation
+                    target_table = pydantic_to_table.get(check_type)
+                    if target_table:
+                        if table_name not in nested_relations:
+                            nested_relations[table_name] = []
+                        nested_relations[table_name].append(
+                            {
+                                "col": f"{field_name}_id",
+                                "target_table": target_table,
+                                "field_name": field_name,
+                            }
+                        )
+
+        # 2. Collect consumed IDs
+        with self.session as session:
+            for parent_table, relations in nested_relations.items():
+                parent_cls = self.sql_models.get(parent_table)
+                if not parent_cls:
+                    continue
+
+                # Select only the relevant FK columns
+                # Construct query dynamically?
+                # Simpler: fetch all objects and iterate.
+                # For large DBs this is bad, but for "dump to yaml" it's probably acceptable for now.
+                rows = session.exec(select(parent_cls)).all()
+                for row in rows:
+                    for rel in relations:
+                        child_id = getattr(row, rel["col"], None)
+                        if child_id is not None:
+                            consumed_ids.add((rel["target_table"], child_id))
+
+            # 3. Export
+            count = 0
+
+            # Helper to recursively serialize
+            def serialize_row(row_obj, t_name):
+                # Convert to dict
+                data = row_obj.model_dump()
+
+                # Remove internal fields
+                if "id" in data:
+                    del data["id"]
+                if "yaml_line" in data:
+                    del data["yaml_line"]
+
+                # Handle Nested Relations
+                if t_name in nested_relations:
+                    for rel in nested_relations[t_name]:
+                        fk_col = rel["col"]
+                        child_id = getattr(row_obj, fk_col, None)
+
+                        # Remove the _id field from data
+                        if fk_col in data:
+                            del data[fk_col]
+
+                        if child_id is not None:
+                            # Fetch child
+                            c_model = self.sql_models.get(rel["target_table"])
+                            if c_model:
+                                c_row = session.get(c_model, child_id)
+                                if c_row:
+                                    child_data = serialize_row(
+                                        c_row, rel["target_table"]
+                                    )
+                                    data[rel["field_name"]] = child_data
+
+                # Remove None values? YASL seems to prefer skipping optional/missing.
+                # Pydantic dump default usually keeps them as None.
+                # Let's filter None values to be cleaner and match typical YAML style
+                return {k: v for k, v in data.items() if v is not None}
+
+            for table_name, model_cls in self.sql_models.items():
+                # Determine Namespace and Type Name
+                ns = model_cls.__module__
+                type_name = model_cls.__name__
+
+                ns_dir = path / (ns if ns else "default")
+                ns_dir.mkdir(parents=True, exist_ok=True)
+
+                # In min_mode, we open one file per type
+                min_docs = []
+
+                rows = session.exec(select(model_cls)).all()
+
+                for row in rows:
+                    if (table_name, getattr(row, "id")) in consumed_ids:  # noqa: B009
+                        continue
+
+                    data_dict = serialize_row(row, table_name)
+
+                    if min_mode:
+                        min_docs.append(data_dict)
+                    else:
+                        # Filename: {Type}_{id}.yaml
+                        row_id = getattr(row, "id")  # noqa: B009
+                        file_name = f"{type_name}_{row_id}.yaml"
+                        file_path = ns_dir / file_name
+
+                        with open(file_path, "w") as f:
+                            yaml.dump(data_dict, f)
+
+                        count += 1
+
+                if min_mode and min_docs:
+                    file_name = f"{type_name}.yaml"
+                    file_path = ns_dir / file_name
+                    with open(file_path, "w") as f:
+                        yaml.dump_all(min_docs, f)
+                    count += 1  # Count files, not records in min mode? Prompt says "number of files written"
+
+            return count
+
     def execute_sql(self, query: str) -> list[dict] | None:
         """Execute raw SQL (fallback)."""
         with self.engine.connect() as conn:
@@ -438,6 +644,20 @@ def load_data(data_path: str) -> int:
         The number of data records successfully loaded.
     """
     return _yaql_engine.load_data(data_path)
+
+
+def export_data(export_path: str, min_mode: bool = False) -> int:
+    """
+    Exports the data from the global YAQL engine to YAML files.
+
+    Args:
+        export_path: Directory where the YAML files will be written.
+        min_mode: If True, writes all records of a type to a single file separated by '---'.
+
+    Returns:
+        Number of files written.
+    """
+    return _yaql_engine.export_data(export_path, min_mode=min_mode)
 
 
 def get_session() -> Session:

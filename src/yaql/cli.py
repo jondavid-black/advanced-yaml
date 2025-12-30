@@ -49,19 +49,6 @@ class YaqlShell(cmd.Cmd):
         count = self.engine.load_data(arg)
         self.log.info(f"✅ Loaded {count} data records.")
 
-    def do_store_schema(self, arg):
-        """
-        Store the current schema to a file.
-        Usage: store_schema <path_to_output_yasl_file>
-        """
-        if not arg:
-            self.log.error("❌ Please provide an output file path.")
-            return
-
-        # Not implemented in the new SQLModel engine yet
-        # We need to serialize sql_models back to YASL
-        self.log.error("❌ store_schema is not yet implemented for SQLModel engine.")
-
     def do_export_data(self, arg):
         """
         Export the current database contents to YAML files.
@@ -143,6 +130,12 @@ def get_parser():
         "--quiet", action="store_true", help="Suppress output except for errors"
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument(
+        "--schema", help="Path to a YASL schema file or directory to load on startup"
+    )
+    parser.add_argument(
+        "--data", help="Path to a YAML data file or directory to load on startup"
+    )
     return parser
 
 
@@ -158,6 +151,11 @@ def main():
         print(f"YAQL version {advanced_yaml_version()}")
         sys.exit(0)
 
+    # Validate schema/data args
+    if args.data and not args.schema:
+        print("❌ Cannot load data without a schema. Please provide --schema.")
+        sys.exit(1)
+
     # Configure logging based on flags
     log_level = logging.INFO
     if args.verbose:
@@ -169,6 +167,26 @@ def main():
 
     engine = YaqlEngine()
     shell = YaqlShell(engine)
+
+    # Load initial schema if provided
+    if args.schema:
+        print(f"Loading schema from: {args.schema}")
+        if engine.load_schema(args.schema):
+            print("✅ Schema loaded successfully.")
+        else:
+            print("❌ Failed to load schema.")
+            # Should we exit if schema loading fails? The prompt doesn't specify,
+            # but usually it's better to stay in the shell or exit.
+            # Given it's an interactive shell tool, maybe stay open but warn?
+            # However, if data is requested, we can't proceed.
+
+    # Load initial data if provided (and schema succeeded)
+    if (
+        args.data and args.schema
+    ):  # args.schema is guaranteed if args.data is present due to check above
+        print(f"Loading data from: {args.data}")
+        count = engine.load_data(args.data)
+        print(f"✅ Loaded {count} data records.")
 
     try:
         shell.cmdloop()

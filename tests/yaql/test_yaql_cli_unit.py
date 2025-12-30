@@ -58,18 +58,6 @@ def test_load_data_no_arg(shell, caplog):
     assert "❌ Please provide a file path or directory." in caplog.text
 
 
-def test_store_schema_not_implemented(shell, mock_engine, caplog):
-    with caplog.at_level(logging.ERROR):
-        shell.do_store_schema("out.yasl")
-    assert "❌ store_schema is not yet implemented for SQLModel engine." in caplog.text
-
-
-def test_store_schema_no_arg(shell, caplog):
-    with caplog.at_level(logging.ERROR):
-        shell.do_store_schema("")
-    assert "❌ Please provide an output file path." in caplog.text
-
-
 def test_export_data_success(shell, mock_engine, caplog):
     mock_engine.export_data.return_value = 5
     with caplog.at_level(logging.INFO):
@@ -253,5 +241,62 @@ def test_cli_conflicting_args_simulated(capsys):
             main()
         assert e.value.code == 1
 
+
+def test_cli_load_schema_on_startup(capsys, caplog):
+    """Test main() with --schema."""
+    from yaql.cli import main
+
+    with (
+        patch("builtins.input", side_effect=["quit"]),
+        patch("sys.argv", ["yaql", "--schema", "path/to/schema"]),
+        patch("logging.basicConfig"),
+        patch("yaql.engine.YaqlEngine.load_schema", return_value=True) as mock_load,
+    ):
+        main()
+        mock_load.assert_called_with("path/to/schema")
+
     captured = capsys.readouterr()
-    assert "❌ Cannot use both --quiet and --verbose." in captured.out
+    assert "Loading schema from: path/to/schema" in captured.out
+    assert "✅ Schema loaded successfully." in captured.out
+
+
+def test_cli_load_data_on_startup_success(capsys, caplog):
+    """Test main() with --schema and --data."""
+    from yaql.cli import main
+
+    with (
+        patch("builtins.input", side_effect=["quit"]),
+        patch(
+            "sys.argv",
+            ["yaql", "--schema", "path/to/schema", "--data", "path/to/data"],
+        ),
+        patch("logging.basicConfig"),
+        patch(
+            "yaql.engine.YaqlEngine.load_schema", return_value=True
+        ) as mock_load_schema,
+        patch("yaql.engine.YaqlEngine.load_data", return_value=10) as mock_load_data,
+    ):
+        main()
+        mock_load_schema.assert_called_with("path/to/schema")
+        mock_load_data.assert_called_with("path/to/data")
+
+    captured = capsys.readouterr()
+    assert "Loading schema from: path/to/schema" in captured.out
+    assert "✅ Schema loaded successfully." in captured.out
+    assert "Loading data from: path/to/data" in captured.out
+    assert "✅ Loaded 10 data records." in captured.out
+
+
+def test_cli_load_data_without_schema_error(capsys):
+    """Test main() with --data but no --schema."""
+    from yaql.cli import main
+
+    with patch("sys.argv", ["yaql", "--data", "path/to/data"]):
+        with pytest.raises(SystemExit) as e:
+            main()
+        assert e.value.code == 1
+
+    captured = capsys.readouterr()
+    assert (
+        "❌ Cannot load data without a schema. Please provide --schema." in captured.out
+    )

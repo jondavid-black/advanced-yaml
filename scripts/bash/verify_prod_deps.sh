@@ -40,13 +40,25 @@ TOOLS=("yasl" "yaql" "yarl" "yatl")
 FAILED=0
 
 for tool in "${TOOLS[@]}"; do
-    echo -n "Checking $tool... "
+    # Check --help
+    echo -n "Checking $tool --help... "
     if "$TEMP_DIR/.venv/bin/$tool" --help > /dev/null 2>&1; then
         echo "✅ OK"
     else
         echo "❌ FAILED"
-        echo "Output from $tool:"
+        echo "Output from $tool --help:"
         "$TEMP_DIR/.venv/bin/$tool" --help || true
+        FAILED=1
+    fi
+
+    # Check --version
+    echo -n "Checking $tool --version... "
+    if "$TEMP_DIR/.venv/bin/$tool" --version > /dev/null 2>&1; then
+        echo "✅ OK"
+    else
+        echo "❌ FAILED"
+        echo "Output from $tool --version:"
+        "$TEMP_DIR/.venv/bin/$tool" --version || true
         FAILED=1
     fi
 done

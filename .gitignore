@@ -51,3 +51,7 @@ tests/manual/
 # Behave output
 reports/
 
+# Local Security Scanning
+codeql-db/
+codeql-results.csv
+

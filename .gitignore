@@ -39,6 +39,7 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 pretty.output
+tests/manual/
 
 # Logs
 *.log

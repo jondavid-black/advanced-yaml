@@ -70,16 +70,20 @@ def test_store_schema_no_arg(shell, caplog):
     assert "❌ Please provide an output file path." in caplog.text
 
 
-def test_store_data_not_implemented(shell, mock_engine, caplog):
-    with caplog.at_level(logging.ERROR):
-        shell.do_store_data("out.yaml")
-    assert "❌ store_data is not yet implemented for SQLModel engine." in caplog.text
+def test_export_data_success(shell, mock_engine, caplog):
+    mock_engine.export_data.return_value = 5
+    with caplog.at_level(logging.INFO):
+        shell.do_export_data("output/path")
+
+    mock_engine.export_data.assert_called_with("output/path", min_mode=False)
+    assert "Exporting data to: output/path" in caplog.text
+    assert "✅ Exported 5 data files." in caplog.text
 
 
-def test_store_data_no_arg(shell, caplog):
+def test_export_data_no_arg(shell, caplog):
     with caplog.at_level(logging.ERROR):
-        shell.do_store_data("")
-    assert "❌ Please provide an output path." in caplog.text
+        shell.do_export_data("")
+    assert "❌ Please provide an output directory." in caplog.text
 
 
 def test_sql_success_with_results(shell, mock_engine, capsys):
@@ -153,13 +157,6 @@ def test_exit_unsaved_changes_confirm(shell, mock_engine, caplog):
 def test_quit_alias(shell, mock_engine):
     mock_engine.unsaved_changes = False
     result = shell.do_quit("")
-    # mock_engine.close.assert_called_once()
-    assert result is True
-
-
-def test_eof_alias(shell, mock_engine):
-    mock_engine.unsaved_changes = False
-    result = shell.do_EOF("")
     # mock_engine.close.assert_called_once()
     assert result is True
 

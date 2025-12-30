@@ -62,18 +62,28 @@ class YaqlShell(cmd.Cmd):
         # We need to serialize sql_models back to YASL
         self.log.error("❌ store_schema is not yet implemented for SQLModel engine.")
 
-    def do_store_data(self, arg):
+    def do_export_data(self, arg):
         """
-        Store the current database contents to YAML.
-        Usage: store_data <path_to_output_yaml_file_or_dir>
+        Export the current database contents to YAML files.
+        Usage: export_data <path_to_output_dir> [min]
+
+        Options:
+            min     If specified, writes all records of a type to a single file separated by '---'.
         """
         if not arg:
-            self.log.error("❌ Please provide an output path.")
+            self.log.error("❌ Please provide an output directory.")
             return
 
-        # Not implemented in the new SQLModel engine yet
-        # We need to dump tables to YAML
-        self.log.error("❌ store_data is not yet implemented for SQLModel engine.")
+        args = arg.split()
+        path = args[0]
+        min_mode = False
+
+        if len(args) > 1 and args[1] == "min":
+            min_mode = True
+
+        self.log.info(f"Exporting data to: {path} (min_mode={min_mode})")
+        count = self.engine.export_data(path, min_mode=min_mode)
+        self.log.info(f"✅ Exported {count} data files.")
 
     def do_sql(self, arg):
         """
@@ -118,11 +128,6 @@ class YaqlShell(cmd.Cmd):
 
     def do_quit(self, arg):
         """Exit the YAQL shell."""
-        return self.do_exit(arg)
-
-    def do_EOF(self, arg):
-        """Exit on Ctrl-D"""
-        print()
         return self.do_exit(arg)
 
 

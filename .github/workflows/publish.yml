@@ -37,6 +37,31 @@ jobs:
           source .venv/bin/activate
           uv pip install -e .[dev]
 
+      - name: Check and Tag Version
+        id: tag_version
+        run: |
+          source .venv/bin/activate
+          VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          TAG="v$VERSION"
+          echo "TAG_NAME=$TAG" >> $GITHUB_ENV
+          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally."
+          else
+            echo "Tag $TAG does not exist. Creating..."
+            git tag -a "$TAG" -m "Release $TAG"
+          fi
+          
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on remote."
+          else
+            echo "Pushing tag $TAG to remote..."
+            git push origin "$TAG"
+          fi
+
       - name: Build package
         run: |
           uv run python -m build
@@ -45,6 +70,8 @@ jobs:
         uses: release-drafter/release-drafter@v6
         with:
           config-name: release-drafter.yml
+          tag: ${{ env.TAG_NAME }}
+          version: ${{ env.TAG_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -53,6 +80,7 @@ jobs:
         with:
           files: dist/*
           draft: false
+          tag_name: ${{ env.TAG_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

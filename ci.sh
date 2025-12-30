@@ -68,6 +68,16 @@ run_bdd() {
     fi
 }
 
+# Run dependency verification
+run_verify_deps() {
+    echo "Verifying production dependencies..."
+    ./scripts/bash/verify_prod_deps.sh
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Dependency verification failed."
+        exit 1
+    fi
+}
+
 # Build docs website
 run_docs() {
     echo "Building docs website..."
@@ -95,6 +105,7 @@ run_all() {
     run_lint
     run_type_check
     run_bdd
+    run_verify_deps
     run_docs
     run_build
 }
@@ -111,6 +122,7 @@ case "$1" in
     lint-fix)  run_lint_fix ;;
     type-check)  run_type_check ;;
     bdd)   run_bdd ;;
+    verify-deps) run_verify_deps ;;
     docs)  run_docs ;;
     build) run_build ;;
     all) run_all ;;

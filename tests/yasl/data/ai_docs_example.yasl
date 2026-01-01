@@ -1,0 +1,32 @@
+definitions:
+  config:
+    types:
+      ServerConfig:
+        description: Main configuration for the server
+        properties:
+          host_ipv4:
+            type: str
+            str_regex: ^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$
+          host_ipv6:
+            type: str
+          port:
+            type: int
+            gt: 1024
+            lt: 65535
+            default: 8080
+          max_upload_size:
+            type: data quantity
+            le: 50 mb
+            description: Max file upload size
+          timeout:
+            type: time
+            default: 30 s
+          environment:
+            type: EnvEnum
+            presence: required
+        validators:
+          at_least_one: [host_ipv4, host_ipv6]
+
+    enums:
+      EnvEnum:
+        values: [dev, stage, prod]

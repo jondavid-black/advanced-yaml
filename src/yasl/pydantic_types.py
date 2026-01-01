@@ -32,12 +32,12 @@ class Property(YASLBaseModel):
     list_max: int | None = None
 
     # numeric constraints
-    gt: float | None = None
-    ge: float | None = None
-    lt: float | None = None
-    le: float | None = None
-    exclude: list[float] | None = None
-    multiple_of: float | None = None
+    gt: Any | None = None
+    ge: Any | None = None
+    lt: Any | None = None
+    le: Any | None = None
+    exclude: list[Any] | None = None
+    multiple_of: Any | None = None
     whole_number: bool | None = False
 
     # string constraints

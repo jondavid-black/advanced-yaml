@@ -54,31 +54,6 @@ Each property within a type can have several attributes to control its validatio
 | `presence` | Whether the property is mandatory. | `required`, `optional` (default: `optional`). |
 | `default` | A default value if the property is missing. | Any valid value for the type. |
 
-### Validation Rules
-
-YASL supports specific validation rules depending on the property's `type`:
-
-#### Numbers (`int`, `float`)
-
-*   `ge`: Greater than or equal to.
-*   `gt`: Greater than.
-*   `le`: Less than or equal to.
-*   `lt`: Less than.
-*   `multiple_of`: Must be a multiple of this number.
-
-#### Strings (`str`)
-
-*   `min_len`: Minimum length.
-*   `max_len`: Maximum length.
-*   `pattern`: A regular expression that the string must match.
-
-#### Files & Paths (`path`)
-
-*   `path_exists`: Boolean. Checks if the path exists on the filesystem.
-*   `is_file`: Boolean. Checks if it is a file.
-*   `is_dir`: Boolean. Checks if it is a directory.
-*   `file_ext`: List of allowed file extensions (e.g., `['.txt', '.md']`).
-
 ## Defining Enums
 
 Enums (Enumerations) allow you to define a fixed set of valid values for a property.
@@ -138,6 +113,88 @@ properties:
   daily_scores:
     type: map[date, int]      # Date keys, Integer values
 ```
+
+## Validator Reference
+
+YASL provides a comprehensive suite of validators to ensure your data meets specific constraints. These validators can be applied to properties in your schema definition.
+
+### String Validators
+Applies to `str`, `string`, `text`.
+
+*   `str_min`: Validates the string has at least this many characters.
+*   `str_max`: Validates the string has at most this many characters.
+*   `str_regex`: Validates the string matches the provided regular expression pattern.
+
+### Numeric Validators
+Applies to `int`, `float`, and physical quantity types.
+
+When used with physical quantities, these validators automatically handle unit conversions. For example, checking if `500 m` is `lt: 1 km` will correctly pass validation.
+
+*   `gt`: Greater than (`>`).
+*   `ge`: Greater than or equal to (`>=`).
+*   `lt`: Less than (`<`).
+*   `le`: Less than or equal to (`<=`).
+*   `multiple_of`: Value must be a multiple of this number (e.g., `1 m` is a multiple of `10 cm`).
+*   `exclude`: A list of specific values that are not allowed. Checks for physical equivalence (e.g., excluding `1000 m` will also exclude `1 km`).
+
+**Example with Physical Units:**
+
+```yaml
+properties:
+  distance:
+    type: length
+    gt: 10 m       # Validates that distance is > 10 meters
+    lt: 5 km       # Validates that distance is < 5 kilometers
+  wavelength:
+    type: length
+    exclude:
+      - 550 nm     # Excludes specific wavelength
+```
+
+### List Validators
+Applies to any list property.
+
+*   `list_min`: The list must contain at least this many items.
+*   `list_max`: The list must contain at most this many items.
+
+### Date & Time Validators
+Applies to `date`, `datetime`, and `clocktime` types.
+
+*   `before`: The value must be strictly before this date/time.
+*   `after`: The value must be strictly after this date/time.
+
+### File & Path Validators
+Applies to `path` types or strings representing file system paths.
+
+*   `path_exists`: If `true`, validates that the path exists on the local filesystem.
+*   `is_dir`: If `true`, validates that the path is a directory (must end with a separator or have no extension).
+*   `is_file`: If `true`, validates that the path is a file (must have an extension).
+*   `file_ext`: A list of allowed file extensions (e.g., `["txt", "md"]` or `[".txt", ".md"]`).
+
+### URL Validators
+Applies to `url` types or strings representing URLs.
+
+*   `url_base`: Validates that the URL belongs to a specific base domain/netloc.
+*   `url_protocols`: A list of allowed URL schemes (e.g., `["http", "https"]`).
+*   `url_reachable`: If `true`, performs a network request (HEAD) to ensure the URL returns a success status code (200-399).
+
+### General Property Validators
+
+*   `unique`: If `true`, ensures the value of this property is unique across all loaded instances of this type.
+*   `any_of`: Validates that the value matches one of the specified types.
+*   `presence`: Controls the strictness of field presence.
+    *   `preferred`: Logs a warning if the field is missing, but does not fail validation.
+
+### Type-Level Validators
+These validators are defined at the type level rather than the property level and enforce relationships between fields.
+
+*   `only_one`: A list of field names where **exactly one** must be present.
+*   `at_least_one`: A list of field names where **at least one** must be present.
+*   `if_then`: Conditional validation rules.
+    *   `eval`: The field to check.
+    *   `value`: The value(s) the `eval` field must match to trigger the rule.
+    *   `present`: List of fields that **must** be present if the condition is met.
+    *   `absent`: List of fields that **must** be absent if the condition is met.
 
 ## Using Namespaces
 

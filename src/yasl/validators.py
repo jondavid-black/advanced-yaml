@@ -8,11 +8,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 import markdown_it
+import numpy as np
 import requests
 from pydantic import field_validator, model_validator
 
 from yasl.cache import YaslRegistry
 from yasl.pydantic_types import IfThen, Property, TypeDef
+from yasl.validator_helpers import _ensure_comparable
 
 
 def unique_value_validator(
@@ -42,38 +44,93 @@ def list_max_validator(cls, value: list[Any], bound: int):
 
 # numeric validation
 def gt_validator(cls, value, bound):
-    if value <= bound:
+    val, bnd = _ensure_comparable(value, bound)
+    if val <= bnd:
         raise ValueError(f"Value must be greater than {bound}")
     return value
 
 
 def ge_validator(cls, value, bound):
-    if value < bound:
+    val, bnd = _ensure_comparable(value, bound)
+    if val < bnd:
         raise ValueError(f"Value must be greater than or equal to {bound}")
     return value
 
 
 def lt_validator(cls, value, bound):
-    if value >= bound:
+    val, bnd = _ensure_comparable(value, bound)
+    if val >= bnd:
         raise ValueError(f"Value must be less than {bound}")
     return value
 
 
 def le_validator(cls, value, bound):
-    if value > bound:
+    val, bnd = _ensure_comparable(value, bound)
+    if val > bnd:
         raise ValueError(f"Value must be less than or equal to {bound}")
     return value
 
 
 def exclude_validator(cls, value, excluded_values):
-    if value in excluded_values:
-        raise ValueError(f"Value must not be one of {excluded_values}")
+    # Need to handle exclusion list potentially containing quantities
+    # This one is tricky because excluded_values is a list.
+    # We should probably try to convert 'value' to match items in list, or vice versa.
+    # For now, let's keep it simple and iterate.
+
+    for ex in excluded_values:
+        val, ex_val = _ensure_comparable(value, ex)
+
+        # Handle astropy quantity comparison explicitly
+        if hasattr(val, "unit") and hasattr(ex_val, "unit"):
+            try:
+                # Check if units are equivalent first
+                # Ensure .unit attribute exists and is not None (double check)
+                val_unit = getattr(val, "unit", None)
+                ex_unit = getattr(ex_val, "unit", None)
+
+                if (
+                    val_unit is not None
+                    and ex_unit is not None
+                    and val_unit.is_equivalent(ex_unit)
+                ):
+                    # Convert val to ex_val unit for comparison
+                    val_conv = val.to(ex_unit)
+                    # Check for equality with tolerance for floats
+                    if np.isclose(val_conv.value, ex_val.value):
+                        raise ValueError(f"Value must not be one of {excluded_values}")
+            except Exception:
+                pass
+
+        # Check for simple equality as well (catches cases where astropy equality fails or isn't applicable)
+        if val == ex_val:
+            raise ValueError(f"Value must not be one of {excluded_values}")
+
     return value
 
 
 def multiple_of_validator(cls, value, bound):
-    if value % bound != 0:
-        raise ValueError(f"Value must be a multiple of {bound}")
+    # Modulo with physical types is supported by astropy
+    val, bnd = _ensure_comparable(value, bound)
+    # Note: astropy Quantity modulo returns a Quantity.
+    # We check if result is zero (or close to zero for floats).
+
+    if hasattr(val, "unit") and hasattr(bnd, "unit"):
+        # For physical types, convert value to bound's unit before modulo
+        # to avoid floating point issues with different bases (like m vs cm)
+        try:
+            val_conv = val.to(bnd.unit)
+            remainder = val_conv.value % bnd.value
+            # Use a small tolerance for floating point comparisons
+            if abs(remainder) > 1e-9 and abs(remainder - bnd.value) > 1e-9:
+                raise ValueError(f"Value must be a multiple of {bound}")
+        except Exception as e:
+            # Fallback if conversion fails (though _ensure_comparable should catch unit mismatch)
+            if val % bnd != 0:
+                raise ValueError(f"Value must be a multiple of {bound}") from e
+
+    else:
+        if val % bnd != 0:
+            raise ValueError(f"Value must be a multiple of {bound}")
     return value
 
 

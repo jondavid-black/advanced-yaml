@@ -62,6 +62,7 @@ nav:
       - "Using Schemas": "guide/schemas.md"
       - "Schema Primitives": "guide/primitives.md"
       - "Data References": "guide/references.md"
+      - "AI Agents": "guide/ai-agents.md"
   - "CLI Reference":
       - "YASL CLI": "reference/cli/yasl.md"
       - "YAQL CLI": "reference/cli/yaql.md"

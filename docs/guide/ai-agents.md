@@ -151,7 +151,7 @@ Use the CLI to verify your schemas and data.
 
 2.  **Validate Data against Schema**:
     ```bash
-    yasl check <path/to/schema.yasl> <path/to/data.yaml> --type <RootTypeName>
+    yasl check <path/to/schema.yasl> <path/to/data.yaml>
     ```
 
 ## 5. Comprehensive Example

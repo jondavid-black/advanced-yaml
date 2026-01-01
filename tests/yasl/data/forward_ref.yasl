@@ -1,0 +1,22 @@
+metadata:
+  name: Forward Reference Test
+definitions:
+  test.forward:
+    types:
+      Node:
+        properties:
+          id:
+            type: int
+            unique: true
+          child:
+            type: ref[Node.id]
+            presence: optional
+          other:
+            type: ref[Other.name]
+            presence: optional
+      
+      Other:
+        properties:
+          name:
+            type: str
+            unique: true

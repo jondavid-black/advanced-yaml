@@ -9,7 +9,7 @@ from collections.abc import Callable
 from enum import Enum
 from io import StringIO
 from pathlib import Path
-from typing import Any, Optional, TextIO, cast
+from typing import Annotated, Any, Optional, TextIO, cast
 
 from pydantic import (
     BaseModel,
@@ -20,7 +20,7 @@ from pydantic import (
 from ruamel.yaml import YAML, YAMLError
 
 from yasl.cache import YaslRegistry
-from yasl.primitives import PRIMITIVE_TYPE_MAP
+from yasl.primitives import PRIMITIVE_TYPE_MAP, ReferenceMarker
 from yasl.pydantic_types import Enumeration, TypeDef, YASLBaseModel, YaslRoot
 from yasl.validators import property_validator_factory, type_validator_factory
 
@@ -278,340 +278,302 @@ def gen_enum_from_enumerations(namespace: str, enum_defs: dict[str, Enumeration]
         registry.register_enum(enum_name, enum_cls, namespace)
 
 
+class _DeferTypeGeneration(Exception):
+    pass
+
+
+def _resolve_ref_type(
+    namespace: str,
+    type_defs: dict[str, TypeDef],
+    prop_name: str,
+    typedef_name: str,
+    type_lookup: str,
+    type_map: dict[str, Any],
+) -> Any:
+    ref_target = type_lookup[4:-1]
+
+    if "." not in ref_target:
+        raise ValueError(
+            f"Reference '{ref_target}' for property '{prop_name}' must be in the format TypeName.PropertyName or Namespace.TypeName.PropertyName"
+        )
+
+    ref_type_name, property_name = ref_target.rsplit(".", 1)
+    ref_type_namespace = None
+    if "." in ref_type_name:
+        ref_type_namespace, ref_type_name = ref_type_name.rsplit(".", 1)
+
+    # Lookup target definition
+    # We prioritize checking if it's a local definition (even if pending) because we only need the definition, not the model.
+
+    target_def = None
+    if (
+        ref_type_namespace is None or ref_type_namespace == namespace
+    ) and ref_type_name in type_defs:
+        target_def = type_defs[ref_type_name]
+
+    if target_def:
+        if property_name not in target_def.properties:
+            raise ValueError(
+                f"Referenced property '{property_name}' in type '{ref_type_name}' not found for property '{prop_name}'"
+            )
+        target_prop = target_def.properties[property_name]
+
+        if not target_prop.unique:
+            raise ValueError(
+                f"Referenced property '{ref_type_name}.{property_name}' must be unique to be used as a reference for property '{typedef_name}.{prop_name}'"
+            )
+
+        if target_prop.type not in type_map:
+            raise ValueError(
+                f"Referenced property '{ref_type_name}.{property_name}' must be a primitive type to be used as a reference for property '{typedef_name}.{prop_name}'"
+            )
+
+        base_type = type_map[target_prop.type]
+        return Annotated[base_type, ReferenceMarker(ref_target)]
+
+    else:
+        # Not found in local defs.
+        # If it's supposed to be local, we fail.
+        # If it's external, we could check registry, but original code didn't support external refs property lookup properly.
+        # We will replicate the "not found" error.
+        raise ValueError(
+            f"Referenced type '{ref_type_name}' for property '{prop_name}' not found in type definitions"
+        )
+
+
+def _resolve_map_type(
+    namespace: str,
+    type_defs: dict[str, TypeDef],
+    registry: YaslRegistry,
+    prop_name: str,
+    type_lookup: str,
+    type_map: dict[str, Any],
+) -> Any:
+    key_str, value_str = type_lookup[4:-1].split(",", 1)
+
+    # Process Key
+    key_type_lookup = key_str.strip()
+    key_type_lookup_ns = None
+    if "." in key_type_lookup:
+        key_type_lookup_ns, key_type_lookup = key_type_lookup.rsplit(".", 1)
+
+    if key_str in ["str", "string"]:
+        key = str
+    elif key_str == "int":
+        key = int
+    else:
+        # Check enum
+        enum_type = registry.get_enum(key_type_lookup, key_type_lookup_ns, namespace)
+        if enum_type:
+            key = enum_type
+        else:
+            acceptable_keys = ["str", "string", "int"] + [
+                f"{ns}.{n}" if ns else n for n, ns in registry.get_enums()
+            ]
+            raise ValueError(
+                f"Map key type '{key_str}' for property '{prop_name}' must be one of {acceptable_keys}."
+            )
+
+    # Process Value
+    value_type_lookup = value_str.strip()
+    value_type_lookup_ns = None
+    map_value_is_list = False
+
+    if value_type_lookup.endswith("[]"):
+        value_type_lookup = value_type_lookup[:-2]
+        map_value_is_list = True
+
+    if "." in value_type_lookup:
+        value_type_lookup_ns, value_type_lookup = value_type_lookup.rsplit(".", 1)
+
+    py_type = None
+    if value_type_lookup in type_map:
+        py_type = type_map[value_type_lookup]
+    elif registry.get_enum(value_type_lookup, value_type_lookup_ns, namespace):
+        py_type = registry.get_enum(value_type_lookup, value_type_lookup_ns, namespace)
+    elif registry.get_type(value_type_lookup, value_type_lookup_ns, namespace):
+        py_type = registry.get_type(value_type_lookup, value_type_lookup_ns, namespace)
+    else:
+        # Check if pending
+        if (
+            value_type_lookup_ns is None or value_type_lookup_ns == namespace
+        ) and value_type_lookup in type_defs:
+            raise _DeferTypeGeneration()
+
+        raise ValueError(
+            f"Unknown map value type '{value_type_lookup}' for property '{prop_name}'"
+        )
+
+    if map_value_is_list:
+        py_type = list[py_type]
+
+    return dict[key, py_type]
+
+
+def _resolve_simple_type(
+    namespace: str,
+    type_defs: dict[str, TypeDef],
+    registry: YaslRegistry,
+    prop_name: str,
+    type_lookup: str,
+    type_lookup_namespace: str | None,
+    type_map: dict[str, Any],
+) -> Any:
+    if type_lookup in type_map:
+        return type_map[type_lookup]
+    elif registry.get_enum(type_lookup, type_lookup_namespace, namespace):
+        return registry.get_enum(type_lookup, type_lookup_namespace, namespace)
+    elif registry.get_type(type_lookup, type_lookup_namespace, namespace):
+        return registry.get_type(type_lookup, type_lookup_namespace, namespace)
+    else:
+        # Check if pending
+        if (
+            type_lookup_namespace is None or type_lookup_namespace == namespace
+        ) and type_lookup in type_defs:
+            raise _DeferTypeGeneration()
+
+        raise ValueError(f"Unknown type '{type_lookup}' for property '{prop_name}'")
+
+
 def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
     """
     Dynamically generate Pydantic model classes from a list of TypeDef instances.
     Each property in the TypeDef becomes a field in the generated model.
     """
     registry = YaslRegistry()
-    for typedef_name, type_def in type_defs.items():
+
+    # 1. Pre-validate no duplicates in registry
+    for typedef_name in type_defs:
         if registry.get_type(typedef_name, namespace) is not None:
             raise ValueError(
                 f"Type definition '{namespace}.{typedef_name}' already exists."
             )
-        fields: dict[str, tuple] = {}
-        validators: dict[str, Callable] = {}
-        for prop_name, prop in type_def.properties.items():
-            # Determine type annotation for the property
-            # For now, map basic types; extend as needed for complex types
-            type_map = PRIMITIVE_TYPE_MAP
-            type_lookup = prop.type
-            type_lookup_namespace = None
-            is_list = False
-            is_ref = False
-            is_map = False
-            key = None
-            py_type = None  # Initialize py_type
 
-            if type_lookup.endswith("[]"):
-                type_lookup = prop.type[:-2]
-                is_list = True
+    # Queue of types to process
+    pending_types = list(type_defs.items())
 
-            if (
-                "ref[" not in type_lookup
-                and "map[" not in type_lookup
-                and "." in type_lookup
-            ):
-                # likely a ref to another type or enum
-                parts = type_lookup.split(".")
-                type_lookup = parts[-1]
-                type_lookup_namespace = ".".join(parts[:-1])
+    while pending_types:
+        progress = False
+        retry_queue = []
 
-            if type_lookup.startswith("ref[") and type_lookup.endswith("]"):
-                is_ref = True
-            # elif "ref[" in type_lookup and type_lookup.endswith("][]"):
-            #     # Handle list of references: ref[target][]
-            #     type_lookup = type_lookup[:-2]
-            #     is_list = True
-            #     is_ref = True
-            # else:
-            #     is_ref = False
+        for typedef_name, type_def in pending_types:
+            try:
+                fields: dict[str, tuple] = {}
+                validators: dict[str, Callable] = {}
 
-            # Prepare to wrap type with Annotated for ReferenceMarker if it's a ref[...]
+                for prop_name, prop in type_def.properties.items():
+                    type_map = PRIMITIVE_TYPE_MAP
+                    type_lookup = prop.type
+                    type_lookup_namespace = None
+                    is_list = False
+                    is_ref = False
+                    is_map = False
+                    py_type = None
 
-            # Block 1: Early ref check (seems redundant?)
-            if is_ref and type_lookup.startswith("ref[") and type_lookup.endswith("]"):
-                from yasl.primitives import ReferenceMarker
+                    if type_lookup.endswith("[]"):
+                        type_lookup = prop.type[:-2]
+                        is_list = True
 
-                ref_target = type_lookup[4:-1]
+                    # Check for namespace or ref/map indicators
+                    if (
+                        "ref[" not in type_lookup
+                        and "map[" not in type_lookup
+                        and "." in type_lookup
+                    ):
+                        parts = type_lookup.split(".")
+                        type_lookup = parts[-1]
+                        type_lookup_namespace = ".".join(parts[:-1])
 
-                # Parse the target to find the underlying primitive type
-                if "." not in ref_target:
-                    raise ValueError(
-                        f"Reference '{ref_target}' for property '{prop_name}' must be in the format TypeName.PropertyName or Namespace.TypeName.PropertyName"
-                    )
-                ref_type_name, property_name = ref_target.rsplit(".", 1)
-                ref_type_namespace = None
-                if "." in ref_type_name:
-                    ref_type_namespace, ref_type_name = ref_type_name.rsplit(".", 1)
+                    if type_lookup.startswith("ref[") and type_lookup.endswith("]"):
+                        is_ref = True
 
-                # We need to temporarily resolve the target type to get the underlying primitive type
-                # For now, we will assume it resolves to a primitive type eventually.
-                # In the original code, it was resolving and checking immediately.
-                # We should keep that logic to determine 'py_type'
+                    if type_lookup.startswith("map[") and type_lookup.endswith("]"):
+                        is_map = True
 
-                target_type = registry.get_type(
-                    ref_type_name, ref_type_namespace, namespace
-                )
-                if not target_type:
-                    # In a real-world scenario we might need forward declaration support.
-                    # For now, raise Error as before
-                    raise ValueError(
-                        f"Referenced type '{ref_type_name}' for property '{prop_name}' not found in type definitions"
-                    )
-                else:
-                    target_prop = next(
-                        (
-                            p
-                            for p_name, p in type_defs[
-                                target_type.__name__
-                            ].properties.items()
-                            if p_name == property_name
-                        ),
-                        None,
-                    )
-                    if not target_prop:
-                        raise ValueError(
-                            f"Referenced property '{property_name}' in type '{ref_type_name}' not found for property '{prop_name}'"
+                    # --- RESOLVE TYPE ---
+
+                    if is_ref:
+                        py_type = _resolve_ref_type(
+                            namespace,
+                            type_defs,
+                            prop_name,
+                            typedef_name,
+                            type_lookup,
+                            type_map,
                         )
-                    else:
-                        if not target_prop.unique:
-                            raise ValueError(
-                                f"Referenced property '{ref_type_name}.{property_name}' must be unique to be used as a reference for property '{typedef_name}.{prop_name}'"
-                            )
-                        elif target_prop.type not in type_map:
-                            raise ValueError(
-                                f"Referenced property '{ref_type_name}.{property_name}' must be a primitive type to be used as a reference for property '{typedef_name}.{prop_name}'"
-                            )
-                        else:
-                            # FOUND IT!
-                            # We set py_type here, so we don't need to fall through to the elif chain below.
-                            base_type = type_map[target_prop.type]
-                            from typing import Annotated
 
-                            from yasl.primitives import ReferenceMarker
-
-                            py_type = Annotated[base_type, ReferenceMarker(ref_target)]
-
-                            # Skip the rest of the if/elif chain
-                            type_lookup = ""  # Hack to skip other checks
-
-            if type_lookup == "":
-                pass  # Already handled
-            elif type_lookup in type_map:
-                py_type = type_map[type_lookup]
-            elif (
-                registry.get_enum(type_lookup, type_lookup_namespace, namespace)
-                is not None
-            ):
-                py_type = registry.get_enum(
-                    type_lookup, type_lookup_namespace, namespace
-                )
-            elif (
-                registry.get_type(type_lookup, type_lookup_namespace, namespace)
-                is not None
-            ):
-                py_type = registry.get_type(
-                    type_lookup, type_lookup_namespace, namespace
-                )
-            elif type_lookup.startswith("map[") and type_lookup.endswith("]"):
-                is_map = True
-                # ... map logic ...
-                key, value = type_lookup[4:-1].split(",", 1)
-
-                key_type_lookup = key.strip()
-                key_type_lookup_namespace = None
-                if "." in key_type_lookup:
-                    key_type_lookup_namespace, key_type_lookup = key_type_lookup.rsplit(
-                        ".", 1
-                    )
-                # make sure map key is a known type
-
-                if key in ["str", "string"]:
-                    key = str
-                elif key == "int":
-                    key = int
-                elif (
-                    registry.get_enum(
-                        key_type_lookup, key_type_lookup_namespace, namespace
-                    )
-                    is not None
-                ):
-                    key = registry.get_enum(
-                        key_type_lookup, key_type_lookup_namespace, namespace
-                    )
-                else:
-                    acceptable_keys = [
-                        "str",
-                        "string",
-                        "int",
-                    ] + registry.get_enums()
-                    raise ValueError(
-                        f"Map key type '{key}' for property '{prop_name}' must be one of {acceptable_keys}."
-                    )
-
-                value_type_lookup = value.strip()
-                value_type_lookup_namespace = None
-                # if map value is a list, handle that
-                map_value_is_list = False
-
-                if value_type_lookup.endswith("[]"):
-                    value_type_lookup = value_type_lookup[:-2]
-                    map_value_is_list = True
-
-                # make sure map value is a known type
-                if "." in value_type_lookup:
-                    value_type_lookup_namespace, value_type_lookup = (
-                        value_type_lookup.rsplit(".", 1)
-                    )
-                if value_type_lookup in type_map:
-                    py_type = type_map[value_type_lookup]
-                elif (
-                    registry.get_enum(
-                        value_type_lookup, value_type_lookup_namespace, namespace
-                    )
-                    is not None
-                ):
-                    py_type = registry.get_enum(
-                        value_type_lookup, value_type_lookup_namespace, namespace
-                    )
-                elif (
-                    registry.get_type(
-                        value_type_lookup, value_type_lookup_namespace, namespace
-                    )
-                    is not None
-                ):
-                    py_type = registry.get_type(
-                        value_type_lookup, value_type_lookup_namespace, namespace
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown map value type '{value_type_lookup}' for property '{prop_name}'"
-                    )
-
-                # wrap in list if needed
-                if map_value_is_list:
-                    py_type = list[py_type]
-            elif (
-                is_ref and type_lookup.startswith("ref[") and type_lookup.endswith("]")
-            ):
-                from typing import Annotated
-
-                from yasl.primitives import ReferenceMarker
-
-                ref_target = type_lookup[4:-1]
-                if "." not in ref_target:
-                    raise ValueError(
-                        f"Reference '{ref_target}' for property '{prop_name}' must be in the format TypeName.PropertyName or Namespace.TypeName.PropertyName"
-                    )
-                ref_type_name, property_name = ref_target.rsplit(".", 1)
-                ref_type_namespace = None
-                if "." in ref_type_name:
-                    ref_type_namespace, ref_type_name = ref_type_name.rsplit(".", 1)
-                target_type = registry.get_type(
-                    ref_type_name, ref_type_namespace, namespace
-                )
-                if not target_type:
-                    raise ValueError(
-                        f"Referenced type '{ref_type_name}' for property '{prop_name}' not found in type definitions"
-                    )
-                else:
-                    target_prop = next(
-                        (
-                            p
-                            for p_name, p in type_defs[
-                                target_type.__name__
-                            ].properties.items()
-                            if p_name == property_name
-                        ),
-                        None,
-                    )
-                    if not target_prop:
-                        raise ValueError(
-                            f"Referenced property '{property_name}' in type '{ref_type_name}' not found for property '{prop_name}'"
+                    elif is_map:
+                        py_type = _resolve_map_type(
+                            namespace,
+                            type_defs,
+                            registry,
+                            prop_name,
+                            type_lookup,
+                            type_map,
                         )
+
                     else:
-                        if not target_prop.unique:
-                            raise ValueError(
-                                f"Referenced property '{ref_type_name}.{property_name}' must be unique to be used as a reference for property '{typedef_name}.{prop_name}'"
-                            )
-                        elif target_prop.type not in type_map:
-                            raise ValueError(
-                                f"Referenced property '{ref_type_name}.{property_name}' must be a primitive type to be used as a reference for property '{typedef_name}.{prop_name}'"
-                            )
-                        else:
-                            base_type = type_map[target_prop.type]
-                            # Wrap the base type with Annotated and ReferenceMarker
-                            # Note: We need to use typing.Annotated explicitly
-                            # and check if we are already dealing with an Optional/Required context
-                            from typing import Annotated
+                        py_type = _resolve_simple_type(
+                            namespace,
+                            type_defs,
+                            registry,
+                            prop_name,
+                            type_lookup,
+                            type_lookup_namespace,
+                            type_map,
+                        )
 
-                            from yasl.primitives import ReferenceMarker
+                    if is_list and not is_map:  # map handled list internally
+                        py_type = list[py_type]
 
-                            py_type = Annotated[base_type, ReferenceMarker(ref_target)]
-            else:
-                raise ValueError(
-                    f"Unknown type '{prop.type}' for property '{prop_name}'"
+                    # --- FIELD CONSTRUCTION ---
+                    is_required = prop.presence == "required"
+                    # Default handling logic...
+                    if not is_required:
+                        py_type = Optional[py_type]
+
+                    default_val = (
+                        prop.default
+                        if prop.default is not None
+                        else (None if not is_required else ...)
+                    )
+                    field_extra = {"unique": prop.unique}
+
+                    fields[prop_name] = (
+                        py_type,
+                        Field(default=default_val, json_schema_extra=field_extra),  # type: ignore
+                    )
+
+                    validators[f"{prop_name}__validator"] = property_validator_factory(
+                        typedef_name, namespace, type_def, prop_name, prop
+                    )
+
+                # --- MODEL CREATION ---
+                fields["yaml_line"] = (Optional[int], Field(default=None, exclude=True))
+                validators["__validate__"] = type_validator_factory(type_def)
+
+                model = create_model(  # type: ignore
+                    typedef_name,
+                    __base__=YASLBaseModel,
+                    __module__=namespace,
+                    __validators__=validators,
+                    __config__={"extra": "forbid"},
+                    **fields,  # type: ignore
                 )
+                registry.register_type(typedef_name, model, namespace)
+                progress = True
 
-            if is_list and is_map:
-                raise ValueError(
-                    f"Property '{prop_name}' cannot be both a list and a map"
-                )
+            except _DeferTypeGeneration:
+                retry_queue.append((typedef_name, type_def))
 
-            if is_list:
-                py_type = list[py_type]
-
-            if is_map:
-                py_type = dict[key, py_type]
-
-            # Handle presence
-            is_required = False
-            if prop.presence == "required":
-                is_required = True
-            elif prop.presence == "preferred":
-                is_required = False
-            elif prop.presence == "optional":
-                is_required = False
-            else:
-                # Default to optional if None (though default is "optional" in model)
-                is_required = False
-
-            if not is_required:
-                py_type = Optional[py_type]
-
-            default_val = (
-                prop.default
-                if prop.default is not None
-                else (None if not is_required else ...)
+        if not progress and retry_queue:
+            # We are stuck.
+            names = [n for n, _ in retry_queue]
+            raise ValueError(
+                f"Unable to resolve dependencies for types: {names}. Circular dependency or missing dependency."
             )
 
-            # Store metadata in json_schema_extra so engines can access it
-            field_extra = {"unique": prop.unique}
-
-            fields[prop_name] = (
-                py_type,  # type: ignore
-                Field(default=default_val, json_schema_extra=field_extra),  # type: ignore
-            )
-
-            validators[f"{prop_name}__validator"] = property_validator_factory(
-                typedef_name, namespace, type_def, prop_name, prop
-            )
-
-        # Add hidden field for YAML line number
-        fields["yaml_line"] = (Optional[int], Field(default=None, exclude=True))
-
-        validators["__validate__"] = type_validator_factory(type_def)
-        model = create_model(  # type: ignore
-            typedef_name,
-            __base__=YASLBaseModel,
-            __module__=namespace,
-            __validators__=validators,
-            __config__={"extra": "forbid"},
-            **fields,  # type: ignore
-        )
-        # Store the generated model in the global registry
-        registry.register_type(typedef_name, model, namespace)
+        pending_types = retry_queue
 
 
 # --- Helper function to find the line number ---

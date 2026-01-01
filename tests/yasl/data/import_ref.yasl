@@ -1,0 +1,11 @@
+imports:
+  - ./import_me.yasl
+definitions:
+  import_test:
+    types:
+      ref_item:
+        description: A type that references an imported type
+        properties:
+          items:
+            description: A list of references to imported items
+            type: ref[import_test.item.name][]

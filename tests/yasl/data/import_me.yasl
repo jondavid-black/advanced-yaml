@@ -1,0 +1,9 @@
+definitions:
+  import_test:
+    types:
+      item:
+        description: An example type for import testing
+        properties:
+          name:
+            type: str
+            unique: true

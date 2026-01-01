@@ -47,7 +47,9 @@ def test_cli_version(monkeypatch, capsys):
 
 
 def test_cli_quiet_and_verbose(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["yasl", "--quiet", "--verbose"])
+    monkeypatch.setattr(
+        sys, "argv", ["yasl", "--quiet", "--verbose", "check", "file.yasl", "data.yaml"]
+    )
     with pytest.raises(SystemExit) as e:
         yasl_cli_main()
     assert e.value.code == 1
@@ -56,15 +58,12 @@ def test_cli_quiet_and_verbose(monkeypatch, capsys):
 
 
 def test_cli_missing_args(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["yasl", "./file.yasl"])
+    monkeypatch.setattr(sys, "argv", ["yasl", "check", "./file.yasl"])
     with pytest.raises(SystemExit) as e:
         yasl_cli_main()
-    assert e.value.code == 1
+    assert e.value.code == 2
     captured = capsys.readouterr()
-    assert (
-        "❌ requires a YASL file, a YAML schema file, and optionally a model name as parameters."
-        in captured.out
-    )
+    assert "the following arguments are required" in captured.err
 
 
 def test_cli_good(monkeypatch, capsys):
@@ -73,6 +72,7 @@ def test_cli_good(monkeypatch, capsys):
         "argv",
         [
             "yasl",
+            "check",
             "./features/yasl/data/todo.yasl",
             "./features/yasl/data/todo.yaml",
             "list_of_tasks",
@@ -84,7 +84,7 @@ def test_cli_good(monkeypatch, capsys):
 
 
 def test_quiet_and_verbose():
-    result = run_cli(["file.yasl", "file.yaml", "--quiet", "--verbose"])
+    result = run_cli(["--quiet", "--verbose", "check", "file.yasl", "file.yaml"])
     assert result.returncode != 0
     assert "Cannot use both" in result.stdout
 
@@ -120,7 +120,7 @@ def run_eval_command_with_paths(yaml_path, yasl_path, model_name, expect_valid):
         assert "data validation successful" in test_log.getvalue()
 
     # Test via the CLI
-    result = run_cli([yasl_path, yaml_path, model_name])
+    result = run_cli(["check", yasl_path, yaml_path, model_name])
     if not expect_valid:
         assert result.returncode != 0
         assert "❌" in result.stdout

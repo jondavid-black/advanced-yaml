@@ -30,6 +30,12 @@ definitions:
             pattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
 ```
 
+You can verify that your schema file is syntactically correct using the `schema` command:
+
+```bash
+yasl schema person.yasl
+```
+
 ## 2. Create Data
 
 Now, create a YAML file named `data.yaml` that adheres to the schema we just defined. You can have multiple YAML documents in a single file separated by `---`.
@@ -46,10 +52,10 @@ age: 25
 
 ## 3. Validate
 
-Use the `yasl` command-line tool to validate your data against the schema.
+Use the `yasl check` command to validate your data against the schema.
 
 ```bash
-yasl person.yasl data.yaml
+yasl check person.yasl data.yaml
 ```
 
 **Expected Output:**
@@ -72,7 +78,7 @@ age: 400  # This violates the 'lt: 125' rule
 Run the validation command again:
 
 ```bash
-yasl person.yasl data.yaml
+yasl check person.yasl data.yaml
 ```
 
 **Expected Output:**

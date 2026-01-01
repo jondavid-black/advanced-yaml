@@ -200,6 +200,69 @@ def yasl_eval(
     return results
 
 
+def check_schema(
+    yasl_schema: str,
+    disable_log: bool = False,
+    quiet_log: bool = False,
+    verbose_log: bool = False,
+    output: str = "text",
+    log_stream: StringIO | TextIO = sys.stdout,
+) -> bool:
+    """
+    Check the validity of a YASL schema file or directory.
+
+    Args:
+        yasl_schema (str): Path to the YASL schema file or directory.
+        disable_log (bool): If True, disables all logging output.
+        quiet_log (bool): If True, suppresses all output except for errors.
+        verbose_log (bool): If True, enables verbose logging output.
+        output (str): Output format for logs. Options are 'text', 'json', or 'yaml'. Default is 'text'.
+        log_stream (StringIO): Stream to which logs will be written. Default is sys.stdout.
+
+    Returns:
+        bool: True if the schema is valid, False otherwise.
+    """
+    _setup_logging(
+        disable=disable_log,
+        verbose=verbose_log,
+        quiet=quiet_log,
+        output=output,
+        stream=log_stream,
+    )
+    log = logging.getLogger("yasl")
+    log.debug(f"YASL Version - {yasl_version()}")
+    log.debug(f"Checking YASL Schema - {yasl_schema}")
+
+    registry = YaslRegistry()
+    registry.clear_caches()
+
+    yasl_files = []
+    if Path(yasl_schema).is_dir():
+        for p in Path(yasl_schema).rglob("*.yasl"):
+            yasl_files.append(p)
+        if not yasl_files:
+            log.error(f"❌ No .yasl files found in directory '{yasl_schema}'")
+            return False
+        log.debug(f"Found {len(yasl_files)} .yasl files in directory '{yasl_schema}'")
+    else:
+        if not Path(yasl_schema).exists():
+            log.error(f"❌ YASL schema file '{yasl_schema}' not found")
+            return False
+        yasl_files.append(Path(yasl_schema))
+
+    all_valid = True
+    for yasl_file in yasl_files:
+        yasl = load_schema_files(yasl_file)
+        if yasl is None:
+            log.error(f"❌ YASL schema validation failed for '{yasl_file}'.")
+            all_valid = False
+        else:
+            log.info(f"✅ YASL schema '{yasl_file}' is valid.")
+
+    registry.clear_caches()
+    return all_valid
+
+
 def gen_enum_from_enumerations(namespace: str, enum_defs: dict[str, Enumeration]):
     """
     Dynamically generate a Python Enum class from an Enumeration instance.

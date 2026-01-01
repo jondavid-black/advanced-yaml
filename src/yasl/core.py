@@ -9,7 +9,7 @@ from collections.abc import Callable
 from enum import Enum
 from io import StringIO
 from pathlib import Path
-from typing import Annotated, Any, Optional, TextIO, cast
+from typing import Annotated, Any, Optional, TextIO, cast, get_args, get_origin
 
 from pydantic import (
     BaseModel,
@@ -310,6 +310,48 @@ def _resolve_ref_type(
         ref_type_namespace is None or ref_type_namespace == namespace
     ) and ref_type_name in type_defs:
         target_def = type_defs[ref_type_name]
+
+    if not target_def:
+        # Check registry for imported/already registered types
+        registry = YaslRegistry()
+        target_model = registry.get_type(ref_type_name, ref_type_namespace, namespace)
+        if target_model:
+            # We need to construct a pseudo-typedef or just look up the field metadata from the Pydantic model
+            # Constructing a TypeDef from the model is safer for consistency
+            # But the model fields already have the info we need.
+
+            # Find the field in the pydantic model
+            if property_name not in target_model.model_fields:
+                raise ValueError(
+                    f"Referenced property '{property_name}' in type '{ref_type_name}' not found for property '{prop_name}'"
+                )
+
+            field_info = target_model.model_fields[property_name]
+
+            # Check for uniqueness in json_schema_extra
+            is_unique = False
+            if field_info.json_schema_extra and isinstance(
+                field_info.json_schema_extra, dict
+            ):
+                is_unique = field_info.json_schema_extra.get("unique", False)
+
+            if not is_unique:
+                raise ValueError(
+                    f"Referenced property '{ref_type_name}.{property_name}' must be unique to be used as a reference for property '{typedef_name}.{prop_name}'"
+                )
+
+            # Check type (this is harder with compiled pydantic models, we need to inspect annotation)
+            # We can simplify and just assume if it registered it's valid, but ideally we check primitive type.
+            # For now, let's assume if it is unique it is a candidate for reference.
+            # We need to return the base type for the Annotated type.
+
+            def get_underlying_type(t):
+                if get_origin(t) is Annotated:
+                    return get_underlying_type(get_args(t)[0])
+                return t
+
+            base_type = get_underlying_type(field_info.annotation)
+            return Annotated[base_type, ReferenceMarker(ref_target)]
 
     if target_def:
         if property_name not in target_def.properties:

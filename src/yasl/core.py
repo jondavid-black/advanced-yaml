@@ -235,6 +235,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
             type_lookup = prop.type
             type_lookup_namespace = None
             is_list = False
+            is_ref = False
             is_map = False
             key = None
             py_type = None  # Initialize py_type
@@ -253,10 +254,20 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                 type_lookup = parts[-1]
                 type_lookup_namespace = ".".join(parts[:-1])
 
+            if type_lookup.startswith("ref[") and type_lookup.endswith("]"):
+                is_ref = True
+            # elif "ref[" in type_lookup and type_lookup.endswith("][]"):
+            #     # Handle list of references: ref[target][]
+            #     type_lookup = type_lookup[:-2]
+            #     is_list = True
+            #     is_ref = True
+            # else:
+            #     is_ref = False
+
             # Prepare to wrap type with Annotated for ReferenceMarker if it's a ref[...]
 
             # Block 1: Early ref check (seems redundant?)
-            if type_lookup.startswith("ref[") and type_lookup.endswith("]"):
+            if is_ref and type_lookup.startswith("ref[") and type_lookup.endswith("]"):
                 from yasl.primitives import ReferenceMarker
 
                 ref_target = type_lookup[4:-1]
@@ -418,7 +429,9 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                 # wrap in list if needed
                 if map_value_is_list:
                     py_type = list[py_type]
-            elif type_lookup.startswith("ref[") and type_lookup.endswith("]"):
+            elif (
+                is_ref and type_lookup.startswith("ref[") and type_lookup.endswith("]")
+            ):
                 from typing import Annotated
 
                 from yasl.primitives import ReferenceMarker

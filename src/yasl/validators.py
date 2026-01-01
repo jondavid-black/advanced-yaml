@@ -199,12 +199,20 @@ def ref_exists_validator(cls, value: Any, target: str):
         type_namespace, type_name = type_name.rsplit(".", 1)
 
     registry = YaslRegistry()
-    if not registry.unique_value_exists(
-        type_name, property_name, value, type_namespace
-    ):
-        raise ValueError(
-            f"Referenced value '{value}' does not exist for 'ref[{target}]"
-        )
+
+    def check_value(v):
+        if not registry.unique_value_exists(
+            type_name, property_name, v, type_namespace
+        ):
+            raise ValueError(
+                f"Referenced value '{v}' does not exist for 'ref[{target}]"
+            )
+
+    if isinstance(value, list):
+        for v in value:
+            check_value(v)
+    else:
+        check_value(value)
 
     return value
 
@@ -357,7 +365,11 @@ def property_validator_factory(
     if property.type.startswith("ref[") and (
         property.no_ref_check is None or property.no_ref_check is False
     ):
-        validators.append(partial(ref_exists_validator, target=property.type[4:-1]))
+        ref_target = property.type[4:-1]
+        if ref_target.endswith("]["):  # This occurs for ref types that are lists
+            ref_target = ref_target[:-2]
+
+        validators.append(partial(ref_exists_validator, target=ref_target))
 
     # enum validators
     registry = YaslRegistry()

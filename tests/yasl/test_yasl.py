@@ -14,6 +14,7 @@ from schema_data import (
     PERSON_WEBSITE_REACHABLE_YAML,
     PERSON_YASL,
     PYDANTIC_TYPES_YASL,
+    REF_LIST_YASL,
     SHAPE_YASL,
     TASK_BAD_NAMESPACE_REF_YASL,
     TODO_BAD_MAP_VALUE_YASL,
@@ -944,3 +945,35 @@ birthday: 1975-11-02
 office: 54
 """
     run_eval_command(yaml_data, yasl, "person", True)
+
+
+def test_ref_list():
+    yasl = REF_LIST_YASL
+    yaml_data = """
+item_name: apple
+---
+item_name: banana
+---
+item_name: cherry
+---
+item_list:
+  - apple
+  - cherry
+"""
+    run_eval_command(yaml_data, yasl, None, True)
+
+
+def test_ref_list_bad_ref():
+    yasl = REF_LIST_YASL
+    yaml_data = """
+item_name: apple
+---
+item_name: banana
+---
+item_name: cherry
+---
+item_list:
+  - apple
+  - dragonfruit
+"""
+    run_eval_command(yaml_data, yasl, None, False)

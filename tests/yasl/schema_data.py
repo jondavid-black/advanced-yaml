@@ -934,3 +934,24 @@ definitions:
           - task_02
           - task_03
 """
+
+REF_LIST_YASL = """
+definitions:
+  acme:
+    types:
+      item:
+        description: An item.
+        properties:
+          item_name:
+            type: str
+            description: The item name.
+            presence: required
+            unique: true
+      collection:
+        description: A collection of items and references.
+        properties:
+          item_list:
+            type: ref[item.item_name][]
+            description: The list of items.
+            presence: required
+"""

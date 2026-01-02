@@ -1,0 +1,15 @@
+# Case 1: Valid nested data
+containers:
+  - name: container1
+    items:
+      - id: item1
+        name: Item One
+      - id: item2
+        name: Item Two
+  - name: container2
+    items:
+      - id: item3
+        name: Item Three
+
+# Reference to nested item
+target_item: item2

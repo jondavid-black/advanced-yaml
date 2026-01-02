@@ -1,0 +1,42 @@
+definitions:
+  container_test:
+    types:
+      Item:
+        description: A simple item with a unique ID
+        properties:
+          id:
+            type: str
+            presence: required
+            unique: true
+          name:
+            type: str
+            presence: required
+      
+      Container:
+        description: A container that holds items
+        properties:
+          name:
+            type: str
+          items:
+            type: Item[]
+            description: List of nested items
+      
+      ContainerList:
+        description: A list of containers
+        properties:
+          containers:
+            type: Container[]
+
+      ReferenceHolder:
+        description: Holds a reference to an item
+        properties:
+          target_item:
+            type: ref[Item.id]
+
+      Root:
+        description: Root object combining everything
+        properties:
+          containers:
+            type: Container[]
+          target_item:
+            type: ref[Item.id]

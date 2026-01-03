@@ -21,11 +21,13 @@ class YaslRegistry:
         return cls._instance
 
     def _init_registry(self) -> None:
-        self.yasl_type_defs: dict[tuple[str, str | None], BaseModel] = {}
+        self.yasl_type_defs: dict[tuple[str, str | None], type[BaseModel]] = {}
         self.yasl_enumerations: dict[tuple[str, str | None], Enum] = {}
         self.unique_values_store: dict[tuple[str, str | None], dict[str, set]] = {}
 
-    def register_type(self, name: str, type_def: BaseModel, namespace: str) -> None:
+    def register_type(
+        self, name: str, type_def: type[BaseModel], namespace: str
+    ) -> None:
         key = (name, namespace)
         log = logging.getLogger("yasl")
         if key in self.yasl_type_defs:
@@ -33,7 +35,7 @@ class YaslRegistry:
         self.yasl_type_defs[key] = type_def
         log.debug(f"Registered type '{name}' in namespace '{namespace}'")
 
-    def get_types(self) -> MappingProxyType[tuple[str, str | None], BaseModel]:
+    def get_types(self) -> MappingProxyType[tuple[str, str | None], type[BaseModel]]:
         # Return a read-only view of the registered types
         return MappingProxyType(self.yasl_type_defs)
 
@@ -42,7 +44,7 @@ class YaslRegistry:
         name: str,
         namespace: str | None = None,
         default_namespace: str | None = None,
-    ) -> BaseModel | None:
+    ) -> type[BaseModel] | None:
         log = logging.getLogger("yasl")
         log.debug(
             f"Looking up type '{name}' in namespace '{namespace}' with default namespace '{default_namespace}'"

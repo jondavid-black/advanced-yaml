@@ -177,7 +177,7 @@ def yasl_eval(
 
     yasl_results = []
     for yasl_file in yasl_files:
-        yasl = load_schema_files(yasl_file)
+        yasl = load_schema_files(str(yasl_file))
         if yasl is None:
             log.error("❌ YASL schema validation failed. Exiting.")
             registry.clear_caches()
@@ -187,7 +187,7 @@ def yasl_eval(
     results = []
 
     for yaml_file in yaml_files:
-        results = load_data_files(yaml_file, model_name)
+        results = load_data_files(str(yaml_file), model_name)
 
         if not results or len(results) == 0:
             log.error(
@@ -252,7 +252,7 @@ def check_schema(
 
     all_valid = True
     for yasl_file in yasl_files:
-        yasl = load_schema_files(yasl_file)
+        yasl = load_schema_files(str(yasl_file))
         if yasl is None:
             log.error(f"❌ YASL schema validation failed for '{yasl_file}'.")
             all_valid = False
@@ -271,7 +271,9 @@ def gen_enum_from_enumerations(namespace: str, enum_defs: dict[str, Enumeration]
     registry = YaslRegistry()
     for enum_name, enum_def in enum_defs.items():
         if registry.get_enum(enum_name, namespace) is not None:
-            raise ValueError(f"Enumeration '{namespace}.{enum_name}' already exists.")
+            # We skip if it already exists to handle diamond dependencies gracefully
+            return
+
         enum_members = {value: value for value in enum_def.values}
         enum_cls = Enum(enum_name, enum_members)
         enum_cls.__module__ = namespace
@@ -284,7 +286,7 @@ class _DeferTypeGeneration(Exception):
 
 def _resolve_ref_type(
     namespace: str,
-    type_defs: dict[str, TypeDef],
+    all_type_defs: dict[tuple[str, str], TypeDef],
     prop_name: str,
     typedef_name: str,
     type_lookup: str,
@@ -303,23 +305,16 @@ def _resolve_ref_type(
         ref_type_namespace, ref_type_name = ref_type_name.rsplit(".", 1)
 
     # Lookup target definition
-    # We prioritize checking if it's a local definition (even if pending) because we only need the definition, not the model.
-
     target_def = None
-    if (
-        ref_type_namespace is None or ref_type_namespace == namespace
-    ) and ref_type_name in type_defs:
-        target_def = type_defs[ref_type_name]
+    target_key = (ref_type_namespace or namespace, ref_type_name)
+    if target_key in all_type_defs:
+        target_def = all_type_defs[target_key]
 
     if not target_def:
         # Check registry for imported/already registered types
         registry = YaslRegistry()
         target_model = registry.get_type(ref_type_name, ref_type_namespace, namespace)
         if target_model:
-            # We need to construct a pseudo-typedef or just look up the field metadata from the Pydantic model
-            # Constructing a TypeDef from the model is safer for consistency
-            # But the model fields already have the info we need.
-
             # Find the field in the pydantic model
             if property_name not in target_model.model_fields:
                 raise ValueError(
@@ -339,11 +334,6 @@ def _resolve_ref_type(
                 raise ValueError(
                     f"Referenced property '{ref_type_name}.{property_name}' must be unique to be used as a reference for property '{typedef_name}.{prop_name}'"
                 )
-
-            # Check type (this is harder with compiled pydantic models, we need to inspect annotation)
-            # We can simplify and just assume if it registered it's valid, but ideally we check primitive type.
-            # For now, let's assume if it is unique it is a candidate for reference.
-            # We need to return the base type for the Annotated type.
 
             def get_underlying_type(t):
                 if get_origin(t) is Annotated:
@@ -374,10 +364,6 @@ def _resolve_ref_type(
         return Annotated[base_type, ReferenceMarker(ref_target)]
 
     else:
-        # Not found in local defs.
-        # If it's supposed to be local, we fail.
-        # If it's external, we could check registry, but original code didn't support external refs property lookup properly.
-        # We will replicate the "not found" error.
         raise ValueError(
             f"Referenced type '{ref_type_name}' for property '{prop_name}' not found in type definitions"
         )
@@ -385,7 +371,7 @@ def _resolve_ref_type(
 
 def _resolve_map_type(
     namespace: str,
-    type_defs: dict[str, TypeDef],
+    all_type_defs: dict[tuple[str, str], TypeDef],
     registry: YaslRegistry,
     prop_name: str,
     type_lookup: str,
@@ -436,10 +422,9 @@ def _resolve_map_type(
     elif registry.get_type(value_type_lookup, value_type_lookup_ns, namespace):
         py_type = registry.get_type(value_type_lookup, value_type_lookup_ns, namespace)
     else:
-        # Check if pending
-        if (
-            value_type_lookup_ns is None or value_type_lookup_ns == namespace
-        ) and value_type_lookup in type_defs:
+        # Check if pending in all_type_defs
+        target_key = (value_type_lookup_ns or namespace, value_type_lookup)
+        if target_key in all_type_defs:
             raise _DeferTypeGeneration()
 
         raise ValueError(
@@ -454,7 +439,7 @@ def _resolve_map_type(
 
 def _resolve_simple_type(
     namespace: str,
-    type_defs: dict[str, TypeDef],
+    all_type_defs: dict[tuple[str, str], TypeDef],
     registry: YaslRegistry,
     prop_name: str,
     type_lookup: str,
@@ -468,39 +453,36 @@ def _resolve_simple_type(
     elif registry.get_type(type_lookup, type_lookup_namespace, namespace):
         return registry.get_type(type_lookup, type_lookup_namespace, namespace)
     else:
-        # Check if pending
-        if (
-            type_lookup_namespace is None or type_lookup_namespace == namespace
-        ) and type_lookup in type_defs:
+        # Check if pending in all_type_defs
+        target_key = (type_lookup_namespace or namespace, type_lookup)
+        if target_key in all_type_defs:
             raise _DeferTypeGeneration()
 
         raise ValueError(f"Unknown type '{type_lookup}' for property '{prop_name}'")
 
 
-def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
+def gen_pydantic_type_models(all_type_defs: dict[tuple[str, str], TypeDef]):
     """
     Dynamically generate Pydantic model classes from a list of TypeDef instances.
     Each property in the TypeDef becomes a field in the generated model.
     """
     registry = YaslRegistry()
 
-    # 1. Pre-validate no duplicates in registry
-    for typedef_name in type_defs:
-        if registry.get_type(typedef_name, namespace) is not None:
-            raise ValueError(
-                f"Type definition '{namespace}.{typedef_name}' already exists."
-            )
-
     # Queue of types to process
-    pending_types = list(type_defs.items())
+    pending_types = list(all_type_defs.items())
 
     while pending_types:
         progress = False
         retry_queue = []
 
-        for typedef_name, type_def in pending_types:
+        for (namespace, typedef_name), type_def in pending_types:
+            # Skip if already registered (e.g. from a previous pass or run)
+            if registry.get_type(typedef_name, namespace) is not None:
+                progress = True
+                continue
+
             try:
-                fields: dict[str, tuple] = {}
+                fields: dict[str, Any] = {}
                 validators: dict[str, Callable] = {}
 
                 for prop_name, prop in type_def.properties.items():
@@ -537,7 +519,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                     if is_ref:
                         py_type = _resolve_ref_type(
                             namespace,
-                            type_defs,
+                            all_type_defs,
                             prop_name,
                             typedef_name,
                             type_lookup,
@@ -547,7 +529,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                     elif is_map:
                         py_type = _resolve_map_type(
                             namespace,
-                            type_defs,
+                            all_type_defs,
                             registry,
                             prop_name,
                             type_lookup,
@@ -557,7 +539,7 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                     else:
                         py_type = _resolve_simple_type(
                             namespace,
-                            type_defs,
+                            all_type_defs,
                             registry,
                             prop_name,
                             type_lookup,
@@ -579,7 +561,9 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                         if prop.default is not None
                         else (None if not is_required else ...)
                     )
-                    field_extra = {"unique": prop.unique}
+
+                    # Fix for type checker: cast explicitly to dict[str, Any] or equivalent
+                    field_extra: dict[str, Any] = {"unique": prop.unique}
 
                     fields[prop_name] = (
                         py_type,
@@ -606,11 +590,11 @@ def gen_pydantic_type_models(namespace: str, type_defs: dict[str, TypeDef]):
                 progress = True
 
             except _DeferTypeGeneration:
-                retry_queue.append((typedef_name, type_def))
+                retry_queue.append(((namespace, typedef_name), type_def))
 
         if not progress and retry_queue:
             # We are stuck.
-            names = [n for n, _ in retry_queue]
+            names = [n for (_, n), _ in retry_queue]
             raise ValueError(
                 f"Unable to resolve dependencies for types: {names}. Circular dependency or missing dependency."
             )
@@ -665,22 +649,120 @@ def load_schema(data: dict[str, Any]) -> YaslRoot:
         raise ValueError("Failed to parse YASL schema from data {data}")
     if yasl.imports is not None:
         log.error(
-            "Imports are not supported by the 'load_and_validate_yasl' function.  Use 'load_and_validate_yasl_files' instead."
+            "Imports are not supported by the 'load_schema' function.  Use 'load_schema_files' instead."
         )
         raise ValueError(
             "YASL import not supported when processing from data dictionary."
         )
     if yasl.metadata is not None:
         log.debug(f"YASL Metadata: {yasl.metadata}")
+
+    # Phase 1: Enums
     if yasl.definitions is not None:
         for namespace, yasl_item in yasl.definitions.items():
-            # generate enums first so enum map keys are known when generating types
             if yasl_item.enums is not None:
                 gen_enum_from_enumerations(namespace, yasl_item.enums)
+
+    # Phase 2: Collect Types
+    all_types: dict[tuple[str, str], TypeDef] = {}
+    if yasl.definitions is not None:
         for namespace, yasl_item in yasl.definitions.items():
             if yasl_item.types is not None:
-                gen_pydantic_type_models(namespace, yasl_item.types)
+                for name, type_def in yasl_item.types.items():
+                    all_types[(namespace, name)] = type_def
+
+    # Phase 3: Generate Types
+    if all_types:
+        gen_pydantic_type_models(all_types)
+
     return yasl
+
+
+def _parse_schema_files_recursive(
+    path: str, log: logging.Logger, visited_paths: set[str] | None = None
+) -> list[YaslRoot] | None:
+    if visited_paths is None:
+        visited_paths = set()
+
+    abs_path = os.path.abspath(path)
+    if abs_path in visited_paths:
+        log.debug(f"Skipping already loaded schema: {path}")
+        return []
+    visited_paths.add(abs_path)
+
+    log.debug(f"--- Attempting to load schema '{path}' ---")
+
+    data = None
+    try:
+        results = []
+        yaml_loader = YAML(typ="rt")
+        docs = []
+        with open(path) as f:
+            docs.extend(yaml_loader.load_all(f))
+
+        for data in docs:
+            yasl = YaslRoot(**data)
+            if yasl is None:
+                raise ValueError("Failed to parse YASL schema from data {data}")
+
+            # Recurse for imports
+            if yasl.imports is not None:
+                for imp in yasl.imports:
+                    imp_path = imp
+                    if not Path(imp_path).exists():
+                        # try relative to current schema file
+                        imp_path = Path(path).parent / imp
+                        if not imp_path.exists():
+                            raise FileNotFoundError(f"Import file '{imp}' not found")
+                        imp_path = imp_path.as_posix()
+
+                    log.debug(
+                        f"Importing additional schema '{imp}' - resolved to '{imp_path}'"
+                    )
+
+                    imported_roots = _parse_schema_files_recursive(
+                        str(imp_path), log, visited_paths
+                    )
+                    if imported_roots is None:  # Propagate failure
+                        return None
+                    results.extend(imported_roots)
+
+            if yasl.metadata is not None:
+                log.debug(f"YASL Metadata: {yasl.metadata}")
+
+            results.append(yasl)
+
+        if not results:
+            log.error(f"❌ No YASL schema definitions found in '{path}'")
+            return None
+
+        return results
+
+    except FileNotFoundError:
+        log.error(f"❌ Error - YASL schema file not found at '{path}'")
+        return None
+    except SyntaxError as e:
+        log.error(f"❌ Error - Syntax error in YASL schema file '{path}'\n  - {e}")
+        return None
+    except YAMLError as e:
+        log.error(f"❌ Error - YAML error while parsing YASL schema '{path}'\n  - {e}")
+        return None
+    except ValidationError as e:
+        log.error(
+            f"❌ YASL schema validation of {path} failed with {len(e.errors())} error(s):"
+        )
+        for error in e.errors():
+            line = _get_line_for_error(data, error["loc"])
+            path_str = " -> ".join(map(str, error["loc"]))
+            if line:
+                log.error(f"  - Line {line}: '{path_str}' -> {error['msg']}")
+            else:
+                log.error(f"  - Location '{path_str}' -> {error['msg']}")
+        return None
+    except Exception as e:
+        log.error(f"❌ An schema error occurred processing '{path}' - {type(e)} - {e}")
+        traceback.print_exc()
+        return None
 
 
 # --- Main schema validation logic ---
@@ -705,74 +787,38 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
         and logs them as errors, returning None.
     """
     log = logging.getLogger("yasl")
-    log.debug(f"--- Attempting to validate schema '{path}' ---")
-    data = None
-    try:
-        results = []
-        yaml_loader = YAML(typ="rt")
-        docs = []
-        with open(path) as f:
-            docs.extend(yaml_loader.load_all(f))
 
-        for data in docs:
-            yasl = YaslRoot(**data)
-            if yasl is None:
-                raise ValueError("Failed to parse YASL schema from data {data}")
-            if yasl.imports is not None:
-                for imp in yasl.imports:
-                    imp_path = imp
-                    if not Path(imp_path).exists():
-                        # try relative to current schema file
-                        imp_path = Path(path).parent / imp
-                        if not imp_path.exists():
-                            raise FileNotFoundError(f"Import file '{imp}' not found")
-                        imp_path = imp_path.as_posix()
-                    log.debug(
-                        f"Importing additional schema '{imp}' - resolved to '{imp_path}'"
-                    )
-                    imported_yasl = load_schema_files(imp_path)
-                    if not imported_yasl:
-                        raise ValueError(f"Failed to import YASL schema from '{imp}'")
-            if yasl.metadata is not None:
-                log.debug(f"YASL Metadata: {yasl.metadata}")
-            if yasl.definitions is not None:
-                for namespace, yasl_item in yasl.definitions.items():
-                    # generate enums first so enum map keys are known when generating types
-                    if yasl_item.enums is not None:
-                        gen_enum_from_enumerations(namespace, yasl_item.enums)
-                for namespace, yasl_item in yasl.definitions.items():
-                    if yasl_item.types is not None:
-                        gen_pydantic_type_models(namespace, yasl_item.types)
-            results.append(yasl)
-        if not results or len(results) == 0:
-            log.error(f"❌ No YASL schema definitions found in '{path}'")
+    # 1. Load all roots recursively
+    roots = _parse_schema_files_recursive(path, log)
+    if roots is None:
+        return None
+
+    # 2. Generate Enums (Pass 1)
+    for root in roots:
+        if root.definitions:
+            for namespace, defs in root.definitions.items():
+                if defs.enums:
+                    gen_enum_from_enumerations(namespace, defs.enums)
+
+    # 3. Collect Types (Pass 2)
+    all_types: dict[tuple[str, str], TypeDef] = {}
+    for root in roots:
+        if root.definitions:
+            for namespace, defs in root.definitions.items():
+                if defs.types:
+                    for name, typedef in defs.types.items():
+                        all_types[(namespace, name)] = typedef
+
+    # 4. Generate Types (Pass 3 - Multi-pass within generator)
+    if all_types:
+        try:
+            gen_pydantic_type_models(all_types)
+        except ValueError as e:
+            log.error(f"❌ Error generating type models: {e}")
             return None
-        log.debug("✅ YASL schema validation successful!")
-        return results
-    except FileNotFoundError:
-        log.error(f"❌ Error - YASL schema file not found at '{path}'")
-        return None
-    except SyntaxError as e:
-        log.error(f"❌ Error - Syntax error in YASL schema file '{path}'\n  - {e}")
-        return None
-    except YAMLError as e:
-        log.error(f"❌ Error - YAML error while parsing YASL schema '{path}'\n  - {e}")
-        return None
-    except ValidationError as e:
-        log.error(
-            f"❌ YASL schema validation of {path} failed with {len(e.errors())} error(s):"
-        )
-        for error in e.errors():
-            line = _get_line_for_error(data, error["loc"])
-            path_str = " -> ".join(map(str, error["loc"]))
-            if line:
-                log.error(f"  - Line {line}: '{path_str}' -> {error['msg']}")
-            else:
-                log.error(f"  - Location '{path_str}' -> {error['msg']}")
-        return None
-    except Exception as e:
-        log.error(f"❌ An schema error occurred processing '{path}' - {type(e)} - {e}")
-        return None
+
+    log.debug("✅ YASL schema validation successful!")
+    return roots
 
 
 def load_data(

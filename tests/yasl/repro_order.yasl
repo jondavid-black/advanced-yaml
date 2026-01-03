@@ -1,0 +1,13 @@
+definitions:
+  ns_a:
+    types:
+      TypeA:
+        properties:
+          b:
+            type: ns_b.TypeB
+  ns_b:
+    types:
+      TypeB:
+        properties:
+          name: 
+            type: str

@@ -234,6 +234,7 @@ STANDARD_TYPES = {
     "clocktime": datetime.time,  # Note: 'time' renamed to 'clocktime' to avoid conflict with astropy 'time' type
     "int": int,
     "float": float,
+    "complex": complex,
     "bool": bool,
     "path": str,
     "url": str,

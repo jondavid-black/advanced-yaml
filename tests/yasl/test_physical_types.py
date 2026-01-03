@@ -145,6 +145,25 @@ def test_complex_units_validation():
         elec_field_type.validate("10 V")
 
 
+def test_imaginary_numbers_supported():
+    """
+    Verify that imaginary numbers ARE now supported by checking
+    that 'complex' is a key in the PRIMITIVE_TYPE_MAP and maps to the complex type.
+    """
+    assert "complex" in PRIMITIVE_TYPE_MAP
+    assert PRIMITIVE_TYPE_MAP["complex"] is complex
+
+
+def test_imaginary_value_validation():
+    """
+    Test basic usage of complex numbers to ensure Python's complex type works as expected.
+    """
+    c = 1 + 2j
+    assert isinstance(c, complex)
+    assert c.real == 1
+    assert c.imag == 2
+
+
 # --- YASL Integration Tests ---
 
 

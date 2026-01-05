@@ -349,10 +349,10 @@ def type_validator(cls, value: str, namespace: str | None = None):
         # Recursively validate key and value types
         try:
             key_type, value_type = [t.strip() for t in map_content.split(",", 1)]
-        except ValueError:
+        except ValueError as e:
             raise ValueError(
                 f"Invalid map type format: '{value}'. Expected 'map[key_type, value_type]'"
-            )
+            ) from e
 
         # Validate key type (must be str, int, or enum according to map_validator rules)
         # First check if it is a valid type in general

@@ -1,10 +1,12 @@
 import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class YASLBaseModel(BaseModel):
+    yaml_line: int | None = Field(default=None, exclude=True)
+
     def __repr__(self) -> str:
         fields = self.model_dump()  # For Pydantic v2; use self.dict() for v1
         return f"{self.__class__.__name__}({fields})"

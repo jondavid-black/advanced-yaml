@@ -374,6 +374,7 @@ def _resolve_map_type(
     all_type_defs: dict[tuple[str, str], TypeDef],
     registry: YaslRegistry,
     prop_name: str,
+    typedef_name: str,
     type_lookup: str,
     type_map: dict[str, Any],
 ) -> Any:
@@ -411,25 +412,41 @@ def _resolve_map_type(
         value_type_lookup = value_type_lookup[:-2]
         map_value_is_list = True
 
-    if "." in value_type_lookup:
-        value_type_lookup_ns, value_type_lookup = value_type_lookup.rsplit(".", 1)
-
     py_type = None
-    if value_type_lookup in type_map:
-        py_type = type_map[value_type_lookup]
-    elif registry.get_enum(value_type_lookup, value_type_lookup_ns, namespace):
-        py_type = registry.get_enum(value_type_lookup, value_type_lookup_ns, namespace)
-    elif registry.get_type(value_type_lookup, value_type_lookup_ns, namespace):
-        py_type = registry.get_type(value_type_lookup, value_type_lookup_ns, namespace)
-    else:
-        # Check if pending in all_type_defs
-        target_key = (value_type_lookup_ns or namespace, value_type_lookup)
-        if target_key in all_type_defs:
-            raise _DeferTypeGeneration()
 
-        raise ValueError(
-            f"Unknown map value type '{value_type_lookup}' for property '{prop_name}'"
+    if value_type_lookup.startswith("ref[") and value_type_lookup.endswith("]"):
+        py_type = _resolve_ref_type(
+            namespace,
+            all_type_defs,
+            prop_name,
+            typedef_name,
+            value_type_lookup,
+            type_map,
         )
+
+    else:
+        if "." in value_type_lookup:
+            value_type_lookup_ns, value_type_lookup = value_type_lookup.rsplit(".", 1)
+
+        if value_type_lookup in type_map:
+            py_type = type_map[value_type_lookup]
+        elif registry.get_enum(value_type_lookup, value_type_lookup_ns, namespace):
+            py_type = registry.get_enum(
+                value_type_lookup, value_type_lookup_ns, namespace
+            )
+        elif registry.get_type(value_type_lookup, value_type_lookup_ns, namespace):
+            py_type = registry.get_type(
+                value_type_lookup, value_type_lookup_ns, namespace
+            )
+        else:
+            # Check if pending in all_type_defs
+            target_key = (value_type_lookup_ns or namespace, value_type_lookup)
+            if target_key in all_type_defs:
+                raise _DeferTypeGeneration()
+
+            raise ValueError(
+                f"Unknown map value type '{value_type_lookup}' for property '{prop_name}'"
+            )
 
     if map_value_is_list:
         py_type = list[py_type]
@@ -532,6 +549,7 @@ def gen_pydantic_type_models(all_type_defs: dict[tuple[str, str], TypeDef]):
                             all_type_defs,
                             registry,
                             prop_name,
+                            typedef_name,
                             type_lookup,
                             type_map,
                         )

@@ -678,6 +678,31 @@ def load_schema(data: dict[str, Any]) -> YaslRoot:
     return yasl
 
 
+def _inject_line_numbers(data: Any, model: BaseModel):
+    """
+    Recursively inject line numbers into Pydantic models from ruamel.yaml data.
+    """
+    # model.yaml_line is already defined in YASLBaseModel as Optional[int]
+    # but pyright might complain if it doesn't know 'model' is YASLBaseModel.
+    # We check isinstance above but pyright might need help.
+    if isinstance(model, YASLBaseModel):
+        if hasattr(data, "lc") and hasattr(data.lc, "line"):
+            model.yaml_line = data.lc.line + 1
+
+    if isinstance(model, BaseModel):
+        for field_name in type(model).model_fields:
+            if field_name in data and isinstance(data[field_name], dict):
+                # Try to get the child model
+                child_val = getattr(model, field_name)
+                if isinstance(child_val, BaseModel):
+                    _inject_line_numbers(data[field_name], child_val)
+                elif isinstance(child_val, dict):
+                    # For dicts of models (like properties: dict[str, Property])
+                    for k, v in child_val.items():
+                        if isinstance(v, BaseModel) and k in data[field_name]:
+                            _inject_line_numbers(data[field_name][k], v)
+
+
 def _parse_schema_files_recursive(
     path: str, log: logging.Logger, visited_paths: set[str] | None = None
 ) -> list[YaslRoot] | None:
@@ -702,6 +727,8 @@ def _parse_schema_files_recursive(
 
         for data in docs:
             yasl = YaslRoot(**data)
+            _inject_line_numbers(data, yasl)
+
             if yasl is None:
                 raise ValueError("Failed to parse YASL schema from data {data}")
 
@@ -814,7 +841,72 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
         try:
             gen_pydantic_type_models(all_types)
         except ValueError as e:
-            log.error(f"❌ Error generating type models: {e}")
+            # Try to enrich the error message if possible, though we don't have direct access
+            # to the YaslRoot objects easily here in the exception handler without iterating again.
+            # However, the user asked to see *where* we output the error message and include the line.
+            # The error 'e' comes from gen_pydantic_type_models or its helpers.
+
+            # To get line numbers, we need to find which definition caused the error.
+            # The ValueError message often contains the type/property name (e.g. "Unknown type 'foo' for property 'bar'").
+            # We can search the 'roots' to find that definition and get its line number.
+
+            error_msg = str(e)
+
+            # Simple heuristic: try to find the property or type name in the error message
+            # and locate it in the loaded roots.
+            found_line = None
+
+            # We iterate through roots to find the problematic definition if we can match the error message content.
+            # This is a best-effort attempt to provide better context.
+            if roots:
+                for root in roots:
+                    # This requires the YaslRoot to have line info attached, which Pydantic models usually don't have by default unless we add it.
+                    # But wait! We parsed using ruamel.yaml earlier, and YaslRoot is a Pydantic model.
+                    # If we kept the original data or if YaslRoot has the line number field...
+                    # We added yaml_line to YASLBaseModel just now!
+
+                    # Let's search inside the definitions
+                    if root.definitions:
+                        for _ns, defs in root.definitions.items():
+                            if defs.types:
+                                for _type_name, type_def in defs.types.items():
+                                    # Check if this type definition is related to the error
+                                    # For "Unknown type 'X' for property 'Y'", we look for property 'Y' in type_def.
+                                    if type_def.properties:
+                                        for (
+                                            prop_name,
+                                            prop_def,
+                                        ) in type_def.properties.items():
+                                            # We might check if error_msg contains property name
+                                            if (
+                                                f"for property '{prop_name}'"
+                                                in error_msg
+                                            ):
+                                                if (
+                                                    hasattr(prop_def, "yaml_line")
+                                                    and prop_def.yaml_line
+                                                ):
+                                                    found_line = prop_def.yaml_line
+                                                    # We don't easily know the filename here unless we stored it in the root or passed it along.
+                                                    # But 'roots' comes from 'load_schema_files(path)'.
+                                                    # Since we recurse, it's hard to know exact file if imported,
+                                                    # but if it's the main file, we know 'path'.
+                                                    # For now let's just show line number if we find it.
+                                                    break
+                                    if found_line:
+                                        break
+                                if found_line:
+                                    break
+                            if found_line:
+                                break
+                        if found_line:
+                            break
+
+            if found_line:
+                log.error(f"❌ Error generating type models (Line {found_line}): {e}")
+            else:
+                log.error(f"❌ Error generating type models: {e}")
+
             return None
 
     log.debug("✅ YASL schema validation successful!")

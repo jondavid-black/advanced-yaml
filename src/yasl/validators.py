@@ -323,6 +323,108 @@ def map_validator(
     return value
 
 
+# type validator
+def type_validator(cls, value: str, namespace: str | None = None):
+    registry = YaslRegistry()
+    from yasl.primitives import PRIMITIVE_TYPE_MAP
+
+    # 1. Check if it's a primitive type
+    if value in PRIMITIVE_TYPE_MAP:
+        return value
+
+    # 2. Check if it's a list of primitives or complex types
+    if value.endswith("[]"):
+        base_type = value[:-2]
+        # Recursively validate the base type
+        type_validator(cls, base_type, namespace)
+        return value
+
+    # 3. Check if it's a map
+    if value.startswith("map[") and value.endswith("]"):
+        # Basic check for map structure, deeper validation requires parsing
+        map_content = value[4:-1]
+        if "," not in map_content:
+            raise ValueError(f"Invalid map type format: '{value}'")
+
+        # Recursively validate key and value types
+        try:
+            key_type, value_type = [t.strip() for t in map_content.split(",", 1)]
+        except ValueError:
+            raise ValueError(
+                f"Invalid map type format: '{value}'. Expected 'map[key_type, value_type]'"
+            )
+
+        # Validate key type (must be str, int, or enum according to map_validator rules)
+        # First check if it is a valid type in general
+        type_validator(cls, key_type, namespace)
+
+        # Then check specific map key constraints if we want to be strict strictly about valid YASL maps
+        # map_validator enforces: str, int, or enum.
+        registry = YaslRegistry()
+        is_enum = False
+        enum_ns = namespace
+        enum_name = key_type
+        if "." in key_type:
+            parts = key_type.rsplit(".", 1)
+            enum_ns = parts[0]
+            enum_name = parts[1]
+
+        if registry.get_enum(enum_name, enum_ns, namespace) is not None:
+            is_enum = True
+
+        if key_type not in ["str", "int"] and not is_enum:
+            raise ValueError(
+                f"Invalid map key type: '{key_type}'. Must be 'str', 'int', or an Enum."
+            )
+
+        # Validate value type recursively
+        type_validator(cls, value_type, namespace)
+
+        return value
+
+    # 4. Check if it's a reference
+    if value.startswith("ref[") and value.endswith("]"):
+        # We accept refs as valid type definitions
+        return value
+
+    # 5. Check if it's a registered type or enum
+    # Handle optional namespace in value
+    val_name = value
+    val_ns = namespace
+    if "." in value:
+        parts = value.rsplit(".", 1)
+        val_ns = parts[0]
+        val_name = parts[1]
+
+    if registry.get_type(val_name, val_ns, namespace) is not None:
+        return value
+
+    if registry.get_enum(val_name, val_ns, namespace) is not None:
+        return value
+
+    # Check for similar types or namespace confusion to provide better error messages
+    # Case 1: Type exists in another namespace
+    if "." not in value:  # If user didn't specify namespace
+        # Search all namespaces for this type name
+        found_namespaces = []
+        for (name, ns), _ in registry.yasl_type_defs.items():
+            if name == val_name and ns != val_ns:
+                found_namespaces.append(ns)
+        for (name, ns), _ in registry.yasl_enumerations.items():
+            if name == val_name and ns != val_ns:
+                found_namespaces.append(ns)
+
+        if found_namespaces:
+            valid_namespaces = ", ".join(
+                sorted([str(n) for n in set(found_namespaces)])
+            )
+            raise ValueError(
+                f"Type '{value}' not found in namespace '{val_ns or 'default'}'. Did you mean one of: {valid_namespaces}?"
+            )
+
+    raise ValueError(f"Type '{value}' is not a valid primitive or registered type.")
+
+
 # markdown validator
 def markdown_validator(cls, value: str):
     try:
@@ -455,6 +557,10 @@ def property_validator_factory(
                 any_of=property.any_of,
             )
         )
+
+    # type validator
+    if property.type == "type":
+        validators.append(partial(type_validator, namespace=type_namespace))
 
     # markdown validator
     if property.type == "markdown":

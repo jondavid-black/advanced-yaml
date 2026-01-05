@@ -287,6 +287,7 @@ STANDARD_TYPES = {
     "EmailStr": EmailStr,
     "NameEmail": NameEmail,
     "IPvAnyAddress": IPvAnyAddress,
+    "type": str,
 }
 
 # --- Unified Map ---

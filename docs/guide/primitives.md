@@ -18,6 +18,8 @@ The foundational types you use every day.
 *   `any`: Accepts any value.
 *   `map[<KeyType>, <ValueType>]`: Dictionary of key-value pairs (e.g., `map[str, int]`).
 *   `ref[<target>]`: Reference to another unique property. See [Using References](references.md).
+*   `type`: Validates that the value is a valid YASL type signature (e.g., `int`, `str`, `map[str, int]`, or a registered type `MyType`).
+*   `markdown`: Validates that the value is valid Markdown text.
 
 ## Pydantic Types
 

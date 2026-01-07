@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from common import advanced_yaml_version
-from yasl import check_paths, check_schema, yasl_eval
+from yasl import check_paths, check_schema
 
 
 def get_parser():

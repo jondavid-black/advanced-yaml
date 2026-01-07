@@ -211,6 +211,33 @@ def check_paths(
 ) -> bool:
     """
     Check mixed YASL schemas and YAML data from a list of paths.
+
+    This function recursively scans the provided paths for YASL schema files (.yasl)
+    and YAML data files (.yaml, .yml). It employs a heuristic to distinguish between
+    schema and data files regardless of extension: if a file parses strictly as a
+    valid YASL schema (YaslRoot), it is treated as such; otherwise, it is treated
+    as data to be validated.
+
+    Process:
+    1.  Scan paths for all candidate files.
+    2.  Classify each file as Schema or Data.
+    3.  Compile all identified Schemas into the YaslRegistry.
+    4.  Validate all identified Data files against the registered schemas.
+        - If `model_name` is provided, validate against that specific model.
+        - Otherwise, auto-detect the schema based on root keys.
+
+    Args:
+        paths (list[str]): List of file or directory paths to scan.
+        model_name (str | None): Optional specific schema type name to enforce for validation.
+        disable_log (bool): If True, disables all logging output.
+        quiet_log (bool): If True, suppresses all output except for errors.
+        verbose_log (bool): If True, enables verbose logging output.
+        output (str): Output format for logs ('text', 'json', 'yaml'). Default 'text'.
+        log_stream (StringIO | TextIO): Stream to write logs to. Default stdout.
+
+    Returns:
+        bool: True if all schemas are valid AND all data files validate successfully.
+              False if any schema fails to compile or any data file fails validation.
     """
     _setup_logging(
         disable=disable_log,

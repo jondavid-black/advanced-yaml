@@ -29,7 +29,7 @@ To use YASL you must first define your data schema in a YASL file as described i
 Once you have a schema and a corresponding data file, you run the YASL command line tool.
 
 ```bash
-yasl <schema> <data> <model_name>
+yasl check <path> [path ...] [--model <model_name>]
 ```
 
 YASL provides various options.
@@ -37,14 +37,9 @@ Here's the full usage info provided by the command line tool.
 
 ```bash
 user@system:~/repos/myproject$ yasl -h
-usage: yasl [-h] [--version] [--quiet] [--verbose] [--output {text,json,yaml}] [schema] [yaml] [model_name]
+usage: yasl [-h] [--version] [--quiet] [--verbose] [--output {text,json,yaml}] {check,schema} ...
 
 YASL - YAML Advanced Schema Language CLI Tool
-
-positional arguments:
-  schema                YASL schema file or directory
-  yaml                  YAML data file or directory
-  model_name            YASL schema type name for the yaml data file (optional)
 
 options:
   -h, --help            show this help message and exit
@@ -53,6 +48,11 @@ options:
   --verbose             Enable verbose output
   --output {text,json,yaml}
                         Set output format (text, json, yaml). Default is text.
+
+commands:
+  {check,schema}        Available commands
+    check               Check mixed YASL schemas and YAML data
+    schema              Check the validity of a YASL schema file
 ```
 
 ### YASL API

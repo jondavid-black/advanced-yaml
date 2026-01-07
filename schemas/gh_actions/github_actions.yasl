@@ -143,6 +143,9 @@ definitions:
             type: permissions
             description: The permissions granted to the GITHUB_TOKEN for the job. You can specify permissions for the entire workflow or for individual jobs. For more information, see "Permissions for the GITHUB_TOKEN."
             presence: optional
+            any_of:
+              - permission_level
+              - permissions
           needs:
             type: any
             description: The jobs that must complete successfully before this job will run. You can specify a single job or an array of jobs. For more information, see "About jobs."
@@ -247,6 +250,9 @@ definitions:
             description: |
               The permissions granted to the GITHUB_TOKEN for the workflow or job. You can specify permissions for the entire workflow or for individual jobs. For more information, see "Permissions for the GITHUB_TOKEN."
             presence: optional
+            any_of:
+              - permission_level
+              - permissions
           on:
             type: on_workflow
             description: |

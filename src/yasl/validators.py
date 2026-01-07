@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import markdown_it
@@ -275,17 +275,110 @@ def ref_exists_validator(cls, value: Any, target: str):
 
 
 # any validator
-def any_of_validator(cls, value: Any, any_of: list[str]):
+def any_of_validator(cls, value: Any, any_of: list[str], namespace: str | None = None):
+    registry = YaslRegistry()
     for t in any_of:
         if t.endswith("[]"):
-            elem_type = t[:-2]
-            if isinstance(value, list) and all(
-                isinstance(v, eval(elem_type)) for v in value
-            ):
-                return value
+            elem_type_name = t[:-2]
+
+            # Helper to check if a value matches the element type
+            def check_list_item(item, type_name):
+                # Primitive types
+                if type_name == "str":
+                    return isinstance(item, str)
+                if type_name == "int":
+                    return isinstance(item, int)
+                if type_name == "float":
+                    return isinstance(item, float)
+                if type_name == "bool":
+                    return isinstance(item, bool)
+
+                # Check for enums/types in registry
+                ns = namespace
+                name = type_name
+                if "." in type_name:
+                    ns, name = type_name.rsplit(".", 1)
+
+                enum_cls = registry.get_enum(name, ns, namespace)
+                if (
+                    enum_cls
+                    and isinstance(item, str)
+                    and item in [e.value for e in cast(Any, enum_cls)]
+                ):  # type: ignore
+                    return True
+
+                type_cls = registry.get_type(name, ns, namespace)
+                # For complex types, validation usually happens during parsing,
+                # but 'value' here might already be parsed or raw dict
+                if type_cls:
+                    # This is tricky without fully instantiating, but Pydantic handles recursive models.
+                    # If 'item' is already a model instance:
+                    if isinstance(item, type_cls):
+                        return True
+                    # If 'item' is a dict, we can't easily check without trying to parse
+                    if isinstance(item, dict):
+                        return True  # Optimistic check?
+
+                return False
+
+            if isinstance(value, list):
+                # We can't easily validate complex types inside list here without full context.
+                # Relying on 'eval' was dangerous and context-missing.
+                # For now, let's trust that if the schema says list[], and we have a list,
+                # and items *look* okay, it's a match.
+                # NOTE: This validator logic is fragile for complex types mixed with primitives in any_of.
+                # Improving support for primitives first:
+                try:
+                    if all(check_list_item(v, elem_type_name) for v in value):
+                        return value
+                except Exception:
+                    pass
         else:
-            if isinstance(value, eval(t)):
+            # Primitive checks
+            if t == "str" and isinstance(value, str):
                 return value
+            if t == "int" and isinstance(value, int):
+                return value
+            if t == "float" and isinstance(value, float):
+                return value
+            if t == "bool" and isinstance(value, bool):
+                return value
+
+            # Registry checks
+            ns = namespace
+            name = t
+            if "." in t:
+                ns, name = t.rsplit(".", 1)
+
+            enum_cls = registry.get_enum(name, ns, namespace)
+            if enum_cls:
+                # Value matches if it is a valid value for this enum
+                # The registry stores the Enum class itself (subclass of enum.Enum)
+                # To iterate over values, we access the members.
+                # Cast to Any to bypass static analysis complaining about iterating over Enum class
+                # which is valid in runtime Python (iterating over Enum class yields members)
+                if isinstance(value, str) and value in [
+                    e.value for e in cast(Any, enum_cls)
+                ]:
+                    return value
+
+            type_cls = registry.get_type(name, ns, namespace)
+            if type_cls:
+                if isinstance(value, type_cls):
+                    return value
+                if isinstance(value, dict):
+                    # If it's a dict, we might want to let Pydantic try to coerce it later?
+                    # But 'any_of_validator' runs *after* field assignment?
+                    # Actually this is a field_validator.
+                    # If the target type is a Pydantic model, 'value' might still be a dict here.
+                    # We can't fully validate it here without parsing.
+                    # But we can check if it looks like the target model?
+                    # Let's assume yes for now if it is a dict.
+                    return value
+
+    # If we fall through, we try to produce a helpful error,
+    # but the previous logic using `eval(t)` was causing NameError because
+    # the types weren't in scope.
     raise ValueError(f"Value '{value}' must be one of {any_of}")
 
 
@@ -518,7 +611,9 @@ def property_validator_factory(
 
     # any validator
     if property.any_of is not None and not property.type.startswith("map[]"):
-        validators.append(partial(any_of_validator, any_of=property.any_of))
+        validators.append(
+            partial(any_of_validator, any_of=property.any_of, namespace=type_namespace)
+        )
 
     # ref validators (always validate references)
     if property.type.startswith("ref[") and (

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class YASLBaseModel(BaseModel):
     yaml_line: int | None = Field(default=None, exclude=True)
+    yaml_file: str | None = Field(default=None, exclude=True)
 
     def __repr__(self) -> str:
         fields = self.model_dump()  # For Pydantic v2; use self.dict() for v1

@@ -47,9 +47,12 @@ def step_impl_run_cli(context: Context):
     # This is where your Go application's validation logic would be called
     # For now, we'll simulate success
     model_name = getattr(context, "model_name", None)
-    result = run_cli(
-        ["check", context.schema_argument, context.document_argument, model_name]
-    )
+
+    args = ["check", context.schema_argument, context.document_argument]
+    if model_name:
+        args.extend(["--model", model_name])
+
+    result = run_cli(args)
     print(f"CLI Output:\n{result.stdout}")
     context.validation_successful = result.returncode == 0
 

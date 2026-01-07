@@ -1,0 +1,109 @@
+definitions:
+  acme:
+    types:
+      address:
+        description: Information about an address.
+        properties:
+          street:
+            type: str
+            description: The street address.
+            presence: required
+          city:
+            type: str
+            description: The city.
+            presence: optional
+          state:
+            type: str
+            description: The state or province.
+            presence: optional
+          zip_code:
+            type: PositiveInt
+            description: The postal code.
+            presence: required
+          name:
+            type: str
+            description: The name by which the address is known.
+            presence: required
+      person:
+        description: Information about a person.
+        properties:
+          name:
+            type: str
+            description: The person's name.
+            presence: required
+          age:
+            type: int
+            description: The person's age.
+            presence: required
+            ge: 18
+            lt: 125
+            whole_number: true
+            exclude:
+              - 65
+          birthday:
+            type: date
+            description: The person's birthday.
+            presence: optional
+            after: "1900-01-01"
+            before: "2050-12-31"
+          favorite_time:
+            type: clocktime
+            description: The person's favorite time of day.
+            presence: optional
+            after: "11:00:00"
+            before: "15:00:00"
+          office:
+            type: any
+            description: The person's office location.
+            presence: optional
+            any_of:
+              - int
+              - bool
+          bio:
+            type: path
+            description: Path to a file containing the person's biography.
+            presence: optional
+            path_exists: false
+            is_file: true
+            file_ext:
+              - txt
+              - .md
+          home_directory:
+            type: path
+            description: Path to the person's home directory.
+            presence: optional
+            path_exists: true
+            is_dir: true
+          website:
+            type: url
+            description: The person's website.
+            presence: optional
+            url_protocols:
+              - http
+              - https
+          address:
+            type: address
+            description: The person's address.
+            presence: optional
+---
+name: Jeff Doe
+age: 30
+birthday: 1975-11-03
+office: 55
+bio: docs/design.md
+home_directory: docs/
+website: https://192.168.1.155
+---
+name: Jenny Doe
+age: 27
+birthday: 1975-11-04
+office: 54
+bio: docs/design.md
+home_directory: docs/
+website: https://192.168.1.155
+address:
+  name: Home Address
+  street: 123 Main St
+  city: Anytown
+  state: CA
+  zip_code: 12345

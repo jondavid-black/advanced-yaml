@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "advanced-yaml"
-version = "0.4.14"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "astropy" },
@@ -55,6 +55,7 @@ dev = [
     { name = "mkdocs" },
     { name = "mkdocs-argparse" },
     { name = "mkdocs-gen-files" },
+    { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "pyright" },
 ]
@@ -106,6 +107,7 @@ dev = [
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-argparse", specifier = ">=0.0.1" },
     { name = "mkdocs-gen-files", specifier = ">=0.6.0" },
+    { name = "mkdocs-material", specifier = ">=9.6.22" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.0" },
     { name = "pyright", specifier = ">=1.1.407" },
 ]

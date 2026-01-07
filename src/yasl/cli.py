@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from common import advanced_yaml_version
-from yasl import check_schema, yasl_eval
+from yasl import check_paths, check_schema, yasl_eval
 
 
 def get_parser():
@@ -34,20 +34,17 @@ def get_parser():
 
     # Command: check (formerly the default behavior)
     check_parser = subparsers.add_parser(
-        "check", help="Check YAML data against a YASL schema"
+        "check", help="Check mixed YASL schemas and YAML data"
     )
     check_parser.add_argument(
-        "schema",
-        help="YASL schema file or directory",
+        "paths",
+        nargs="+",
+        help="List of files or directories containing schemas and data",
     )
     check_parser.add_argument(
-        "yaml",
-        help="YAML data file or directory",
-    )
-    check_parser.add_argument(
-        "model_name",
-        nargs="?",
-        help="YASL schema type name for the yaml data file (optional)",
+        "--model",
+        dest="model_name",
+        help="Specific YASL schema type name to validate data against (optional)",
     )
 
     # Command: schema (new command)
@@ -75,16 +72,15 @@ def main():
         sys.exit(0)
 
     if args.command == "check":
-        yasl = yasl_eval(
-            args.schema,
-            args.yaml,
-            args.model_name,
+        success = check_paths(
+            args.paths,
+            model_name=args.model_name,
             disable_log=False,
             quiet_log=args.quiet,
             verbose_log=args.verbose,
             output=args.output,
         )
-        if not yasl:
+        if not success:
             sys.exit(1)
         else:
             sys.exit(0)

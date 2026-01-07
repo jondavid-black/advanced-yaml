@@ -8,6 +8,7 @@ YASL also supports references between types and properties, enabling complex dat
 
 from yasl.cache import get_yasl_registry
 from yasl.core import (
+    check_paths,
     check_schema,
     load_data,
     load_data_files,
@@ -19,6 +20,7 @@ from yasl.core import (
 
 __all__ = [
     "yasl_eval",
+    "check_paths",
     "check_schema",
     "load_schema",
     "load_schema_files",

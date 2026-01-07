@@ -200,6 +200,232 @@ def yasl_eval(
     return results
 
 
+def check_paths(
+    paths: list[str],
+    model_name: str | None = None,
+    disable_log: bool = False,
+    quiet_log: bool = False,
+    verbose_log: bool = False,
+    output: str = "text",
+    log_stream: StringIO | TextIO = sys.stdout,
+) -> bool:
+    """
+    Check mixed YASL schemas and YAML data from a list of paths.
+    """
+    _setup_logging(
+        disable=disable_log,
+        verbose=verbose_log,
+        quiet=quiet_log,
+        output=output,
+        stream=log_stream,
+    )
+    log = logging.getLogger("yasl")
+    log.debug(f"YASL Version - {yasl_version()}")
+
+    registry = YaslRegistry()
+    registry.clear_caches()
+
+    # 1. Collect all files
+    files_to_process = set()
+    for p_str in paths:
+        p = Path(p_str)
+        if p.is_dir():
+            # Recursively find .yaml, .yml, .yasl
+            files_to_process.update(p.rglob("*.yaml"))
+            files_to_process.update(p.rglob("*.yml"))
+            files_to_process.update(p.rglob("*.yasl"))
+            log.debug(
+                f"Scanned directory '{p}' found {len(files_to_process)} files so far."
+            )
+        elif p.exists():
+            files_to_process.add(p)
+        else:
+            log.error(f"❌ Path not found: '{p}'")
+            return False
+
+    if not files_to_process:
+        log.error("❌ No files found to process.")
+        return False
+
+    schemas: list[YaslRoot] = []
+    # Store data as (dict_data, file_path_str)
+    data_items: list[tuple[Any, str]] = []
+
+    yaml_loader = YAML(typ="rt")
+
+    # 2. Parse and Classify
+    for file_path in files_to_process:
+        path_str = str(file_path)
+        log.debug(f"Processing '{path_str}'")
+        try:
+            with open(file_path) as f:
+                # load_all returns a generator
+                docs = list(yaml_loader.load_all(f))
+        except Exception as e:
+            log.error(f"❌ Failed to read file '{path_str}': {e}")
+            return False
+
+        for doc in docs:
+            if doc is None:
+                continue
+
+            # Heuristic: Try to parse as YaslRoot (Schema)
+            try:
+                # YaslRoot structure is strict.
+                # However, an empty dict or minimal dict might pass if optional fields are None.
+                # But YaslRoot requires at least one of imports, metadata, or definitions to be useful.
+                # Let's trust Pydantic validation.
+
+                # Check 1: If it's a list, it's definitely not a YaslRoot (which is a dict)
+                if not isinstance(doc, dict):
+                    raise ValidationError.from_exception_data("Not a dict", [])
+
+                schema_candidate = YaslRoot(**doc)
+
+                # Check 2: If it's effectively empty, treat as data unless file extension is .yasl
+                if not any(
+                    [
+                        schema_candidate.imports,
+                        schema_candidate.metadata,
+                        schema_candidate.definitions,
+                    ]
+                ):
+                    if not path_str.endswith(".yasl"):
+                        raise ValidationError.from_exception_data("Empty schema", [])
+
+                # Inject metadata
+                _inject_line_numbers(doc, schema_candidate, path_str)
+                schemas.append(schema_candidate)
+                log.debug(f"Found schema in '{path_str}'")
+
+                # Handle imports if any
+                if schema_candidate.imports:
+                    for imp in schema_candidate.imports:
+                        imp_path = Path(path_str).parent / imp
+                        if imp_path.exists() and imp_path not in files_to_process:
+                            # It's a new file, we should probably add it to the queue?
+                            # For now, let's keep it simple: we process what we found.
+                            pass
+
+            except ValidationError as e:
+                # If it's a .yasl file, it implies it SHOULD be a schema.
+                # If validation fails, we should warn the user to help debugging.
+                if path_str.endswith(".yasl"):
+                    log.warning(
+                        f"⚠️ File '{path_str}' has .yasl extension but failed schema validation:"
+                    )
+                    for err in e.errors():
+                        loc = " -> ".join(map(str, err["loc"]))
+                        log.warning(f"  - {err['msg']} at {loc}")
+                    log.warning("Treating as data.")
+
+                # It's not a valid Schema, assume it's Data
+                data_items.append((doc, path_str))
+                log.debug(f"Found data in '{path_str}'")
+
+    # 3. Compile Schemas
+    log.debug(f"Compiling {len(schemas)} schemas...")
+    if not compile_yasl_roots(schemas):
+        log.error("❌ Schema compilation failed.")
+        return False
+
+    # 4. Validate Data
+    log.debug(f"Validating {len(data_items)} data documents...")
+    all_valid = True
+
+    # We can reuse logic from load_data_files but adapted for in-memory data
+    # We need to auto-detect model for each data item
+
+    for data, path_str in data_items:
+        # Auto-detect or use model_name
+        candidate_model_names: list[tuple[str, str | None]] = []
+
+        if model_name is None:
+            root_keys = list(data.keys())
+            # registry is singleton, populated by compile_yasl_roots
+            yasl_types = registry.get_types()
+            for type_id, type_def in yasl_types.items() or []:
+                t_name, t_ns = type_id
+                t_def_keys = list(type_def.model_fields.keys())
+                # subset check: all keys in data must be in type definition?
+                # No, standard auto-detect logic in load_data_files was:
+                # if all(k in type_def_root_keys for k in root_keys):
+                if all(k in t_def_keys for k in root_keys):
+                    candidate_model_names.append((t_name, t_ns))
+        else:
+            # Look up specific model
+            # Check if it exists
+            if registry.get_type(model_name):
+                # We don't know namespace from CLI arg easily unless provided.
+                # registry.get_type handles ambiguous check if ns is None.
+                # We can just try to find it.
+                # But we need (name, ns) tuple for the loop below.
+                # Let's find the matching entries.
+                found_type = registry.get_type(model_name)
+                if found_type:
+                    candidate_model_names.append((model_name, found_type.__module__))
+
+        validated = False
+        if not candidate_model_names:
+            log.error(
+                f"❌ No matching schema found for data in '{path_str}' (Keys: {list(data.keys())})"
+            )
+            if hasattr(data, "lc"):
+                log.error(f"   Line: {data.lc.line + 1}")
+            all_valid = False
+            continue
+
+        for s_name, s_ns in candidate_model_names:
+            model_cls = registry.get_type(s_name, s_ns)
+            if not model_cls:
+                continue
+
+            # Inject info for validation
+            if hasattr(data, "lc"):
+                data["yaml_line"] = data.lc.line + 1
+            data["yaml_file"] = path_str
+
+            try:
+                cast(type[BaseModel], model_cls)(**data)
+                validated = True
+                log.info(
+                    f"✅ Data in '{path_str}' (Line {data.get('yaml_line', '?')}) validated as '{s_name}'"
+                )
+                break
+            except ValidationError as e:
+                # If we have multiple candidates, one failing is expected.
+                # If ALL fail, we report errors.
+                # We defer reporting until we try all candidates.
+                pass
+
+        if not validated:
+            log.error(f"❌ Validation failed for data in '{path_str}'")
+            # We should probably print the errors from the *best* candidate or all of them.
+            # Rerunning validation to print errors for the first candidate if any, or just generic error.
+            # Let's try to validate against the first candidate again to show errors,
+            # or if multiple, maybe just say "Ambiguous or invalid".
+            # Re-running simply to log errors:
+            if candidate_model_names:
+                target_name, target_ns = candidate_model_names[0]
+                model_cls = registry.get_type(target_name, target_ns)
+                try:
+                    cast(type[BaseModel], model_cls)(**data)
+                except ValidationError as e:
+                    for error in e.errors():
+                        line = _get_line_for_error(data, error["loc"])
+                        path_loc = " -> ".join(map(str, error["loc"]))
+                        file_info = f"{path_str}:{line}" if line else path_str
+                        log.error(f"  - {file_info} -> {error['msg']}")
+
+            all_valid = False
+
+    if all_valid and data_items:
+        log.info("✅ data validation successful")
+
+    registry.clear_caches()
+    return all_valid
+
+
 def check_schema(
     yasl_schema: str,
     disable_log: bool = False,
@@ -696,7 +922,7 @@ def load_schema(data: dict[str, Any]) -> YaslRoot:
     return yasl
 
 
-def _inject_line_numbers(data: Any, model: BaseModel):
+def _inject_line_numbers(data: Any, model: BaseModel, file_path: str | None = None):
     """
     Recursively inject line numbers into Pydantic models from ruamel.yaml data.
     """
@@ -706,6 +932,8 @@ def _inject_line_numbers(data: Any, model: BaseModel):
     if isinstance(model, YASLBaseModel):
         if hasattr(data, "lc") and hasattr(data.lc, "line"):
             model.yaml_line = data.lc.line + 1
+        if file_path:
+            model.yaml_file = file_path
 
     if isinstance(model, BaseModel):
         for field_name in type(model).model_fields:
@@ -713,12 +941,12 @@ def _inject_line_numbers(data: Any, model: BaseModel):
                 # Try to get the child model
                 child_val = getattr(model, field_name)
                 if isinstance(child_val, BaseModel):
-                    _inject_line_numbers(data[field_name], child_val)
+                    _inject_line_numbers(data[field_name], child_val, file_path)
                 elif isinstance(child_val, dict):
                     # For dicts of models (like properties: dict[str, Property])
                     for k, v in child_val.items():
                         if isinstance(v, BaseModel) and k in data[field_name]:
-                            _inject_line_numbers(data[field_name][k], v)
+                            _inject_line_numbers(data[field_name][k], v, file_path)
 
 
 def _parse_schema_files_recursive(
@@ -745,7 +973,7 @@ def _parse_schema_files_recursive(
 
         for data in docs:
             yasl = YaslRoot(**data)
-            _inject_line_numbers(data, yasl)
+            _inject_line_numbers(data, yasl, path)
 
             if yasl is None:
                 raise ValueError("Failed to parse YASL schema from data {data}")
@@ -838,6 +1066,20 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
     if roots is None:
         return None
 
+    if not compile_yasl_roots(roots):
+        return None
+
+    log.debug("✅ YASL schema validation successful!")
+    return roots
+
+
+def compile_yasl_roots(roots: list[YaslRoot]) -> bool:
+    """
+    Compile a list of YaslRoot objects into Python types and register them.
+    Performs Enum generation, Type collection, and Pydantic model generation.
+    """
+    log = logging.getLogger("yasl")
+
     # 2. Generate Enums (Pass 1)
     for root in roots:
         if root.definitions:
@@ -859,43 +1101,22 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
         try:
             gen_pydantic_type_models(all_types)
         except ValueError as e:
-            # Try to enrich the error message if possible, though we don't have direct access
-            # to the YaslRoot objects easily here in the exception handler without iterating again.
-            # However, the user asked to see *where* we output the error message and include the line.
-            # The error 'e' comes from gen_pydantic_type_models or its helpers.
-
-            # To get line numbers, we need to find which definition caused the error.
-            # The ValueError message often contains the type/property name (e.g. "Unknown type 'foo' for property 'bar'").
-            # We can search the 'roots' to find that definition and get its line number.
-
+            # Try to enrich the error message
             error_msg = str(e)
-
-            # Simple heuristic: try to find the property or type name in the error message
-            # and locate it in the loaded roots.
             found_line = None
 
-            # We iterate through roots to find the problematic definition if we can match the error message content.
-            # This is a best-effort attempt to provide better context.
+            found_file = None
             if roots:
                 for root in roots:
-                    # This requires the YaslRoot to have line info attached, which Pydantic models usually don't have by default unless we add it.
-                    # But wait! We parsed using ruamel.yaml earlier, and YaslRoot is a Pydantic model.
-                    # If we kept the original data or if YaslRoot has the line number field...
-                    # We added yaml_line to YASLBaseModel just now!
-
-                    # Let's search inside the definitions
                     if root.definitions:
                         for _ns, defs in root.definitions.items():
                             if defs.types:
                                 for _type_name, type_def in defs.types.items():
-                                    # Check if this type definition is related to the error
-                                    # For "Unknown type 'X' for property 'Y'", we look for property 'Y' in type_def.
                                     if type_def.properties:
                                         for (
                                             prop_name,
                                             prop_def,
                                         ) in type_def.properties.items():
-                                            # We might check if error_msg contains property name
                                             if (
                                                 f"for property '{prop_name}'"
                                                 in error_msg
@@ -905,11 +1126,7 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
                                                     and prop_def.yaml_line
                                                 ):
                                                     found_line = prop_def.yaml_line
-                                                    # We don't easily know the filename here unless we stored it in the root or passed it along.
-                                                    # But 'roots' comes from 'load_schema_files(path)'.
-                                                    # Since we recurse, it's hard to know exact file if imported,
-                                                    # but if it's the main file, we know 'path'.
-                                                    # For now let's just show line number if we find it.
+                                                    found_file = prop_def.yaml_file
                                                     break
                                     if found_line:
                                         break
@@ -921,14 +1138,16 @@ def load_schema_files(path: str) -> list[YaslRoot] | None:
                             break
 
             if found_line:
-                log.error(f"❌ Error generating type models (Line {found_line}): {e}")
+                location = f"Line {found_line}"
+                if found_file:
+                    location = f"{found_file}:{found_line}"
+                log.error(f"❌ Error generating type models ({location}): {e}")
             else:
                 log.error(f"❌ Error generating type models: {e}")
 
-            return None
+            return False
 
-    log.debug("✅ YASL schema validation successful!")
-    return roots
+    return True
 
 
 def load_data(

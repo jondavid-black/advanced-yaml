@@ -58,7 +58,7 @@ def test_cli_quiet_and_verbose(monkeypatch, capsys):
 
 
 def test_cli_missing_args(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["yasl", "check", "./file.yasl"])
+    monkeypatch.setattr(sys, "argv", ["yasl", "check"])
     with pytest.raises(SystemExit) as e:
         yasl_cli_main()
     assert e.value.code == 2
@@ -75,6 +75,7 @@ def test_cli_good(monkeypatch, capsys):
             "check",
             "./features/yasl/data/todo.yasl",
             "./features/yasl/data/todo.yaml",
+            "--model",
             "list_of_tasks",
         ],
     )
@@ -120,7 +121,11 @@ def run_eval_command_with_paths(yaml_path, yasl_path, model_name, expect_valid):
         assert "data validation successful" in test_log.getvalue()
 
     # Test via the CLI
-    result = run_cli(["check", yasl_path, yaml_path, model_name])
+    cli_args = ["check", yasl_path, yaml_path]
+    if model_name:
+        cli_args.extend(["--model", model_name])
+
+    result = run_cli(cli_args)
     if not expect_valid:
         assert result.returncode != 0
         assert "❌" in result.stdout

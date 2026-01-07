@@ -281,8 +281,23 @@ def check_paths(
     yaml_loader = YAML(typ="rt")
 
     # 2. Parse and Classify
-    for file_path in files_to_process:
-        path_str = str(file_path)
+    queue = list(files_to_process)
+    processed_paths = set()
+
+    while queue:
+        file_path = queue.pop(0)
+        # Use resolve() to handle symlinks and absolute paths correctly
+        try:
+            abs_path = file_path.resolve()
+        except OSError:
+            # Handle cases where path might not exist or be accessible
+            continue
+
+        path_str = str(abs_path)
+        if path_str in processed_paths:
+            continue
+        processed_paths.add(path_str)
+
         log.debug(f"Processing '{path_str}'")
         try:
             with open(file_path) as f:
@@ -327,11 +342,12 @@ def check_paths(
                 # Handle imports if any
                 if schema_candidate.imports:
                     for imp in schema_candidate.imports:
-                        imp_path = Path(path_str).parent / imp
-                        if imp_path.exists() and imp_path not in files_to_process:
-                            # It's a new file, we should probably add it to the queue?
-                            # For now, let's keep it simple: we process what we found.
-                            pass
+                        imp_path = file_path.parent / imp
+                        if imp_path.exists():
+                            queue.append(imp_path)
+                            log.debug(f"Queued imported schema: {imp_path}")
+                        else:
+                            log.warning(f"Imported file not found: {imp_path}")
 
             except ValidationError:
                 # It's not a valid Schema, assume it's Data

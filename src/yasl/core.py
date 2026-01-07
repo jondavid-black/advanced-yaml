@@ -282,7 +282,7 @@ def check_paths(
 
                 schema_candidate = YaslRoot(**doc)
 
-                # Check 2: If it's effectively empty, treat as data unless file extension is .yasl
+                # Check 2: If it's effectively empty, treat as data.
                 if not any(
                     [
                         schema_candidate.imports,
@@ -290,8 +290,7 @@ def check_paths(
                         schema_candidate.definitions,
                     ]
                 ):
-                    if not path_str.endswith(".yasl"):
-                        raise ValidationError.from_exception_data("Empty schema", [])
+                    raise ValidationError.from_exception_data("Empty schema", [])
 
                 # Inject metadata
                 _inject_line_numbers(doc, schema_candidate, path_str)
@@ -307,18 +306,7 @@ def check_paths(
                             # For now, let's keep it simple: we process what we found.
                             pass
 
-            except ValidationError as e:
-                # If it's a .yasl file, it implies it SHOULD be a schema.
-                # If validation fails, we should warn the user to help debugging.
-                if path_str.endswith(".yasl"):
-                    log.warning(
-                        f"⚠️ File '{path_str}' has .yasl extension but failed schema validation:"
-                    )
-                    for err in e.errors():
-                        loc = " -> ".join(map(str, err["loc"]))
-                        log.warning(f"  - {err['msg']} at {loc}")
-                    log.warning("Treating as data.")
-
+            except ValidationError:
                 # It's not a valid Schema, assume it's Data
                 data_items.append((doc, path_str))
                 log.debug(f"Found data in '{path_str}'")
@@ -392,7 +380,7 @@ def check_paths(
                     f"✅ Data in '{path_str}' (Line {data.get('yaml_line', '?')}) validated as '{s_name}'"
                 )
                 break
-            except ValidationError as e:
+            except ValidationError:
                 # If we have multiple candidates, one failing is expected.
                 # If ALL fail, we report errors.
                 # We defer reporting until we try all candidates.
@@ -415,7 +403,7 @@ def check_paths(
                         line = _get_line_for_error(data, error["loc"])
                         path_loc = " -> ".join(map(str, error["loc"]))
                         file_info = f"{path_str}:{line}" if line else path_str
-                        log.error(f"  - {file_info} -> {error['msg']}")
+                        log.error(f"  - {file_info} -> {error['msg']} (at {path_loc})")
 
             all_valid = False
 
